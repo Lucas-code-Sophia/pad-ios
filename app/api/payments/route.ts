@@ -31,20 +31,28 @@ export async function POST(request: NextRequest) {
 
     if (splitMode === "items" && itemQuantities) {
       const paymentItems = []
-      for (const [orderItemId, quantity] of Object.entries(itemQuantities)) {
-        const quantityNum = Number(quantity) // Conversion explicite en nombre
-        if (quantityNum > 0) {
-          // Get the item price
-          const { data: orderItem } = await supabase.from("order_items").select("price").eq("id", orderItemId).single()
+      const selectedEntries = Object.entries(itemQuantities)
+        .map(([orderItemId, quantity]) => [orderItemId, Number(quantity)] as const)
+        .filter(([, quantityNum]) => quantityNum > 0)
 
-          if (orderItem) {
-            paymentItems.push({
-              payment_id: paymentData.id,
-              order_item_id: orderItemId,
-              quantity: quantityNum,
-              amount: orderItem.price * quantityNum,
-            })
-          }
+      if (selectedEntries.length > 0) {
+        const itemIds = selectedEntries.map(([orderItemId]) => orderItemId)
+        const { data: orderItemsForPayment } = await supabase
+          .from("order_items")
+          .select("id, price")
+          .in("id", itemIds)
+
+        const priceByItemId = new Map((orderItemsForPayment || []).map((item) => [item.id, item.price]))
+
+        for (const [orderItemId, quantityNum] of selectedEntries) {
+          const itemPrice = priceByItemId.get(orderItemId)
+          if (itemPrice == null) continue
+          paymentItems.push({
+            payment_id: paymentData.id,
+            order_item_id: orderItemId,
+            quantity: quantityNum,
+            amount: itemPrice * quantityNum,
+          })
         }
       }
 
@@ -146,16 +154,32 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Failed to fetch payments" }, { status: 500 })
     }
 
-    const paymentsWithItems = await Promise.all(
-      payments.map(async (payment) => {
-        const { data: items } = await supabase.from("payment_items").select("*").eq("payment_id", payment.id)
+    if (!payments || payments.length === 0) {
+      return NextResponse.json([])
+    }
 
-        return {
-          ...payment,
-          items: items || [],
-        }
-      }),
-    )
+    const paymentIds = payments.map((payment) => payment.id)
+    const { data: allItems, error: itemsError } = await supabase
+      .from("payment_items")
+      .select("*")
+      .in("payment_id", paymentIds)
+
+    if (itemsError) {
+      console.error("[v0] Error fetching payment items:", itemsError)
+      return NextResponse.json({ error: "Failed to fetch payment items" }, { status: 500 })
+    }
+
+    const itemsByPaymentId = new Map<string, any[]>()
+    for (const item of allItems || []) {
+      const existing = itemsByPaymentId.get(item.payment_id) || []
+      existing.push(item)
+      itemsByPaymentId.set(item.payment_id, existing)
+    }
+
+    const paymentsWithItems = payments.map((payment) => ({
+      ...payment,
+      items: itemsByPaymentId.get(payment.id) || [],
+    }))
 
     return NextResponse.json(paymentsWithItems)
   } catch (error) {

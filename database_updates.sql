@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_order_items_created_by_server_id ON order_items(c
 CREATE INDEX IF NOT EXISTS idx_order_items_printed_plan_at ON order_items(printed_plan_at);
 CREATE INDEX IF NOT EXISTS idx_order_items_printed_fired_at ON order_items(printed_fired_at);
 CREATE INDEX IF NOT EXISTS idx_daily_sales_complimentary ON daily_sales(date, server_id);
+CREATE INDEX IF NOT EXISTS idx_orders_table_status_created_at ON orders(table_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_status_created_at ON order_items(order_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_payments_order_created_at ON payments(order_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_supplements_order_id ON supplements(order_id);
 
 -- 5. Mettre à jour les tables existantes (optionnel)
 -- Décommentez si vous voulez nettoyer les données existantes

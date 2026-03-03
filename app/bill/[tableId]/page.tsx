@@ -114,41 +114,46 @@ export default function BillPage() {
 
   const fetchData = async () => {
     try {
-      const tableRes = await fetch(`/api/tables/${tableId}`)
+      const [tableRes, orderRes] = await Promise.all([
+        fetch(`/api/tables/${tableId}`),
+        fetch(`/api/orders/table/${tableId}`),
+      ])
+
       if (tableRes.ok) {
         const tableData = await tableRes.json()
         setTable(tableData)
       }
 
-      const orderRes = await fetch(`/api/orders/table/${tableId}`)
       if (orderRes.ok) {
         const orderData = await orderRes.json()
         if (orderData) {
           setOrder(orderData.order)
 
-          const menuRes = await fetch("/api/menu/items")
+          const [menuRes, paymentsRes, supplementsRes] = await Promise.all([
+            fetch("/api/menu/items"),
+            fetch(`/api/payments?orderId=${orderData.order.id}`),
+            fetch(`/api/supplements?orderId=${orderData.order.id}`),
+          ])
+
+          const paidItemQuantities = new Map<string, number>()
+          if (paymentsRes.ok) {
+            const paymentsData = await paymentsRes.json()
+            const totalPaid = paymentsData.reduce((sum: number, p: any) => sum + Number.parseFloat(p.amount), 0)
+            setPaidAmount(totalPaid)
+            setPaymentsCount(paymentsData.length)
+
+            paymentsData.forEach((payment: any) => {
+              if (payment.items && payment.items.length > 0) {
+                payment.items.forEach((item: PaymentItem) => {
+                  const currentPaid = paidItemQuantities.get(item.order_item_id) || 0
+                  paidItemQuantities.set(item.order_item_id, currentPaid + item.quantity)
+                })
+              }
+            })
+          }
+
           if (menuRes.ok) {
             const menuItems = await menuRes.json()
-
-            const paymentsRes = await fetch(`/api/payments?orderId=${orderData.order.id}`)
-            const paidItemQuantities = new Map<string, number>()
-
-            if (paymentsRes.ok) {
-              const paymentsData = await paymentsRes.json()
-              const totalPaid = paymentsData.reduce((sum: number, p: any) => sum + Number.parseFloat(p.amount), 0)
-              setPaidAmount(totalPaid)
-              setPaymentsCount(paymentsData.length)
-
-              paymentsData.forEach((payment: any) => {
-                if (payment.items && payment.items.length > 0) {
-                  payment.items.forEach((item: PaymentItem) => {
-                    const currentPaid = paidItemQuantities.get(item.order_item_id) || 0
-                    paidItemQuantities.set(item.order_item_id, currentPaid + item.quantity)
-                  })
-                }
-              })
-            }
-
             const itemsWithMenu = orderData.items.map((item: OrderItem) => ({
               ...item,
               menu_item: menuItems.find((m: MenuItem) => m.id === item.menu_item_id),
@@ -157,7 +162,6 @@ export default function BillPage() {
             setItems(itemsWithMenu)
           }
 
-          const supplementsRes = await fetch(`/api/supplements?orderId=${orderData.order.id}`)
           if (supplementsRes.ok) {
             const supplementsData = await supplementsRes.json()
             setSupplements(supplementsData)

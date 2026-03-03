@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, Reservation } from "@/lib/types"
@@ -53,6 +53,8 @@ export default function FloorPlanPage() {
   const [customLayouts, setCustomLayouts] = useState<FloorPlanLayout[]>([])
   const [visualLayouts, setVisualLayouts] = useState<VisualFloorPlan[]>([])
   const [userAssignments, setUserAssignments] = useState<UserFloorPlanAssignments>({ assignments: {}, default_layout: "" })
+  const tablesRequestRef = useRef<Promise<void> | null>(null)
+  const reservationsRequestRef = useRef<Promise<void> | null>(null)
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -127,21 +129,15 @@ export default function FloorPlanPage() {
 
   useEffect(() => {
     if (user) {
-      // Initial load: wait for ALL data before hiding the loading spinner
+      // Initial load: keep active-layout behavior stable, then load secondary layout metadata in background.
       const fetchInitialData = async () => {
         try {
-          await Promise.all([
-            fetchTables(),
-            fetchReservationsForToday(),
-            fetchLayoutSetting(),
-            fetchLayouts(),
-            fetchVisualLayouts(),
-            fetchUserAssignments(),
-          ])
+          await Promise.all([fetchTables(), fetchReservationsForToday(), fetchLayoutSetting(), fetchUserAssignments()])
         } catch (e) {
           console.error("[v0] Error during initial load:", e)
         } finally {
           setLoading(false)
+          void Promise.allSettled([fetchLayouts(), fetchVisualLayouts()])
         }
       }
       fetchInitialData()
@@ -198,41 +194,57 @@ export default function FloorPlanPage() {
   }, [user])
 
   const fetchTables = async () => {
-    try {
-      const response = await fetch("/api/tables")
-      if (response.ok) {
-        const data = await response.json()
-        setTables(data)
+    if (tablesRequestRef.current) return tablesRequestRef.current
+
+    tablesRequestRef.current = (async () => {
+      try {
+        const response = await fetch("/api/tables")
+        if (response.ok) {
+          const data = await response.json()
+          setTables(data)
+        }
+      } catch (error) {
+        console.error("[v0] Error fetching tables:", error)
+      } finally {
+        tablesRequestRef.current = null
       }
-    } catch (error) {
-      console.error("[v0] Error fetching tables:", error)
-    }
+    })()
+
+    return tablesRequestRef.current
   }
 
   const fetchReservationsForToday = async () => {
-    try {
-      const today = new Date()
-      const yyyy = today.getFullYear()
-      const mm = String(today.getMonth() + 1).padStart(2, "0")
-      const dd = String(today.getDate()).padStart(2, "0")
-      const dateStr = `${yyyy}-${mm}-${dd}`
-      const response = await fetch(`/api/reservations?date=${dateStr}`)
-      if (response.ok) {
-        const data: Reservation[] = await response.json()
-        const map: Record<string, Reservation[]> = {}
-        for (const r of data) {
-          if (r.status !== "pending" && r.status !== "confirmed") continue
-          if (!map[r.table_id]) map[r.table_id] = []
-          map[r.table_id].push(r)
+    if (reservationsRequestRef.current) return reservationsRequestRef.current
+
+    reservationsRequestRef.current = (async () => {
+      try {
+        const today = new Date()
+        const yyyy = today.getFullYear()
+        const mm = String(today.getMonth() + 1).padStart(2, "0")
+        const dd = String(today.getDate()).padStart(2, "0")
+        const dateStr = `${yyyy}-${mm}-${dd}`
+        const response = await fetch(`/api/reservations?date=${dateStr}`)
+        if (response.ok) {
+          const data: Reservation[] = await response.json()
+          const map: Record<string, Reservation[]> = {}
+          for (const r of data) {
+            if (r.status !== "pending" && r.status !== "confirmed") continue
+            if (!map[r.table_id]) map[r.table_id] = []
+            map[r.table_id].push(r)
+          }
+          for (const k of Object.keys(map)) {
+            map[k].sort((a, b) => (a.reservation_time < b.reservation_time ? -1 : 1))
+          }
+          setReservationsByTable(map)
         }
-        for (const k of Object.keys(map)) {
-          map[k].sort((a, b) => (a.reservation_time < b.reservation_time ? -1 : 1))
-        }
-        setReservationsByTable(map)
+      } catch (e) {
+        // ignore
+      } finally {
+        reservationsRequestRef.current = null
       }
-    } catch (e) {
-      // ignore
-    }
+    })()
+
+    return reservationsRequestRef.current
   }
 
   const fetchLayoutSetting = async () => {

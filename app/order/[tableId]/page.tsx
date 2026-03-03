@@ -152,8 +152,8 @@ export default function OrderPage() {
       const loadInitialData = async () => {
         try {
           setLoading(true)
-          await fetchBaseData()
-          await fetchOrderData()
+          const initialItems = await fetchBaseData()
+          await fetchOrderData(initialItems)
         } finally {
           setLoading(false)
         }
@@ -263,25 +263,32 @@ export default function OrderPage() {
 
   const fetchBaseData = async () => {
     try {
-      await Promise.all([fetchCategories(), fetchMenuItems(), fetchAllergenMap()])
+      const [, itemsData] = await Promise.all([fetchCategories(), fetchMenuItems(), fetchAllergenMap()])
+      return itemsData
     } catch (error) {
       console.error("[v0] Error fetching base data:", error)
+      return []
     }
   }
 
-  const fetchOrderData = async () => {
+  const fetchOrderData = async (menuItemsOverride?: MenuItem[]) => {
     try {
-      // Fetch table
-      const tableRes = await fetch(`/api/tables/${tableId}`)
+      const currentItemsPromise = menuItemsOverride
+        ? Promise.resolve(menuItemsOverride)
+        : menuItems.length > 0
+          ? Promise.resolve(menuItems)
+          : fetchMenuItems()
+
+      const [tableRes, orderRes, currentItems] = await Promise.all([
+        fetch(`/api/tables/${tableId}`),
+        fetch(`/api/orders/table/${tableId}`, { cache: "no-store" }),
+        currentItemsPromise,
+      ])
+
       if (tableRes.ok) {
         const tableData = await tableRes.json()
         setTable(tableData)
       }
-
-      const currentItems = menuItems.length > 0 ? menuItems : await fetchMenuItems()
-
-      // Fetch order
-      const orderRes = await fetch(`/api/orders/table/${tableId}`, { cache: "no-store" })
       if (orderRes.ok) {
         const orderData = await orderRes.json()
         if (orderData) {
