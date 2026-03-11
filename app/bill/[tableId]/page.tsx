@@ -452,7 +452,8 @@ export default function BillPage() {
         <title>${escapeHtml(title)}</title>
         <style>
           * { box-sizing: border-box; }
-          body { font-family: monospace; padding: 12px; max-width: 320px; margin: 0 auto; color: #000; background: #fff; }
+          body { font-family: monospace; margin: 0; background: #fff; }
+          #ticket-root { padding: 12px; width: 320px; margin: 0 auto; color: #000; background: #fff; display: block; }
           .center { text-align: center; }
           .divider { border-top: 1px dashed #000; margin: 8px 0; }
           .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
@@ -465,11 +466,12 @@ export default function BillPage() {
           .footer { text-align: center; margin-top: 12px; font-size: 10px; }
           .meta { display:flex; justify-content:space-between; font-size:10px; gap:8px; }
           @media print {
-            html, body { margin: 0; padding: 6px; max-width: none; }
+            html, body { margin: 0; padding: 0; }
+            #ticket-root { padding: 6px; width: auto; display: block; }
           }
         </style>
       </head>
-      <body>${body}</body>
+      <body><div id="ticket-root">${body}</div></body>
     </html>
   `
 
@@ -694,6 +696,65 @@ export default function BillPage() {
 
   const isValidEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 
+  const renderTicketImageFromHtml = async (ticketHtml: string) => {
+    if (typeof window === "undefined") return null
+
+    const html2canvas = (await import("html2canvas")).default
+    const iframe = document.createElement("iframe")
+    iframe.setAttribute("aria-hidden", "true")
+    iframe.style.position = "fixed"
+    iframe.style.left = "-10000px"
+    iframe.style.top = "0"
+    iframe.style.width = "380px"
+    iframe.style.height = "10px"
+    iframe.style.opacity = "0"
+    iframe.style.pointerEvents = "none"
+    document.body.appendChild(iframe)
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          reject(new Error("Timeout de chargement du ticket"))
+        }, 5000)
+
+        iframe.onload = () => {
+          window.clearTimeout(timeout)
+          resolve()
+        }
+        iframe.onerror = () => {
+          window.clearTimeout(timeout)
+          reject(new Error("Impossible de charger le ticket"))
+        }
+        iframe.srcdoc = ticketHtml
+      })
+
+      const doc = iframe.contentDocument
+      if (!doc) return null
+
+      await new Promise((resolve) => window.setTimeout(resolve, 80))
+
+      const target = doc.getElementById("ticket-root") || doc.body
+      const rect = target.getBoundingClientRect()
+      const captureWidth = Math.ceil(rect.width || target.scrollWidth || 360)
+      const captureHeight = Math.ceil(rect.height || target.scrollHeight || 720)
+
+      const canvas = await html2canvas(target, {
+        scale: 2,
+        backgroundColor: "#ffffff",
+        useCORS: true,
+        logging: false,
+        width: captureWidth,
+        height: captureHeight,
+        windowWidth: captureWidth,
+        windowHeight: captureHeight,
+      })
+
+      return canvas.toDataURL("image/png").replace(/^data:image\/png;base64,/, "")
+    } finally {
+      iframe.remove()
+    }
+  }
+
   const sendTicketByEmail = async (ticketType: "addition" | "repas", html: string, pdfLines: string[]) => {
     const email = ticketEmail.trim()
     if (!email || !isValidEmail(email)) {
@@ -706,6 +767,12 @@ export default function BillPage() {
 
     try {
       const subject = `Ticket ${ticketType} - Table ${table?.table_number || "-"}`
+      const ticketImageBase64 = await renderTicketImageFromHtml(html)
+      if (!ticketImageBase64) {
+        alert("Impossible de générer l'image exacte du ticket. Réessayez dans quelques secondes.")
+        return
+      }
+
       const response = await fetch("/api/bill/send-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -716,6 +783,7 @@ export default function BillPage() {
           pdfLines,
           ticketType,
           tableNumber: table?.table_number || "-",
+          ticketImageBase64,
         }),
       })
 
