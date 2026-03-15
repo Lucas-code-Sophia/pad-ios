@@ -66,22 +66,25 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     const menuItemIds = Array.from(new Set(items.map((item) => item.menu_item_id).filter(Boolean)))
 
     let menuNameById = new Map<string, string>()
+    let menuTaxById = new Map<string, number>()
     if (menuItemIds.length > 0) {
-      const { data: menuItems, error: menuError } = await supabase
+      const { data: menuItemsData, error: menuError } = await supabase
         .from("menu_items")
-        .select("id, name")
+        .select("id, name, tax_rate")
         .in("id", menuItemIds)
 
       if (menuError) {
         console.error("[v0] Error fetching menu names for transaction detail:", menuError)
       } else {
-        menuNameById = new Map((menuItems || []).map((menuItem) => [menuItem.id, menuItem.name]))
+        menuNameById = new Map((menuItemsData || []).map((menuItem) => [menuItem.id, menuItem.name]))
+        menuTaxById = new Map((menuItemsData || []).map((menuItem) => [menuItem.id, Number(menuItem.tax_rate || 0)]))
       }
     }
 
     const detailedItems = items.map((item) => ({
       ...item,
       menu_name: menuNameById.get(item.menu_item_id) || "Article inconnu",
+      tax_rate: menuTaxById.get(item.menu_item_id) ?? 0,
       line_total: Number(item.price || 0) * Number(item.quantity || 0),
     }))
 

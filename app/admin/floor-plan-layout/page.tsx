@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "@/components/ui/use-toast"
 import type { Table } from "@/lib/types"
+import { sortTablesForDisplay } from "@/lib/table-sort"
 import type {
   VisualFloorPlan,
   VisualFloorPlanItem,
@@ -115,7 +116,7 @@ export default function FloorPlanLayoutAdminPage() {
         fetch("/api/settings/user-floor-plan-assignments"),
       ])
 
-      if (tablesRes.ok) setTables(await tablesRes.json())
+      if (tablesRes.ok) setTables(sortTablesForDisplay(await tablesRes.json()))
       if (usersRes.ok) setUsers(await usersRes.json())
       if (layoutsRes.ok) {
         const data = await layoutsRes.json()
@@ -282,12 +283,7 @@ export default function FloorPlanLayoutAdminPage() {
   const placedTableIds = useMemo(() => new Set(items.filter((i) => i.type === "table").map((i) => i.tableId)), [items])
 
   const unplacedTables = useMemo(
-    () => tables.filter((t) => !placedTableIds.has(t.id)).sort((a, b) => {
-      if (a.location !== b.location) return a.location.localeCompare(b.location)
-      const numA = Number.parseInt(a.table_number.substring(1)) || 0
-      const numB = Number.parseInt(b.table_number.substring(1)) || 0
-      return numA - numB
-    }),
+    () => sortTablesForDisplay(tables.filter((t) => !placedTableIds.has(t.id))),
     [tables, placedTableIds],
   )
 

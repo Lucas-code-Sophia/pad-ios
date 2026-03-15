@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Reservation, Table } from "@/lib/types"
 import type { VisualFloorPlan } from "@/lib/floor-plan-layouts"
+import { sortTablesForDisplay } from "@/lib/table-sort"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ArrowLeft, Calendar, Plus, Phone, Users, Clock, CheckCircle, XCircle, ChevronLeft, ChevronRight, Sun, Moon, Pencil, Trash2, MapPin, X, MessageCircle, Star, Heart } from "lucide-react"
@@ -150,7 +151,7 @@ export default function ReservationsPage() {
       const response = await fetch("/api/tables")
       if (response.ok) {
         const data = await response.json()
-        setTables(data.sort((a: Table, b: Table) => a.table_number.localeCompare(b.table_number)))
+        setTables(sortTablesForDisplay(data))
       }
     } catch (error) {
       console.error("[v0] Error fetching tables:", error)
@@ -1462,4 +1463,3 @@ export default function ReservationsPage() {
     </div>
   )
 }
-

@@ -37,6 +37,7 @@ export interface Table {
   opened_by?: string // UUID du serveur qui a ouvert la table
   opened_by_name?: string // Nom du serveur qui a ouvert la table
   current_covers?: number | null // Nombre de couverts de la commande en cours
+  has_to_follow?: boolean // True si la commande ouverte contient des plats en à suivre 1/2
   archived?: boolean
   created_at: string
 }

@@ -15,10 +15,11 @@ export async function GET() {
     // Enrichir les tables occupées avec le nombre de couverts de la commande ouverte
     const occupiedTableIds = (tables || []).filter((t: any) => t.status === "occupied").map((t: any) => t.id)
     let coversMap = new Map<string, number>()
+    let hasToFollowMap = new Map<string, boolean>()
     if (occupiedTableIds.length > 0) {
       const { data: openOrders } = await supabase
         .from("orders")
-        .select("table_id, covers")
+        .select("id, table_id, covers")
         .in("table_id", occupiedTableIds)
         .eq("status", "open")
 
@@ -27,11 +28,31 @@ export async function GET() {
           coversMap.set(o.table_id, o.covers)
         }
       }
+
+      const openOrderIds = (openOrders || []).map((o: any) => o.id).filter(Boolean)
+      if (openOrderIds.length > 0) {
+        const { data: toFollowItems } = await supabase
+          .from("order_items")
+          .select("order_id")
+          .in("order_id", openOrderIds)
+          .in("status", ["to_follow_1", "to_follow_2"])
+
+        const orderToTableMap = new Map<string, string>()
+        for (const o of openOrders || []) {
+          orderToTableMap.set(o.id, o.table_id)
+        }
+
+        for (const item of toFollowItems || []) {
+          const tableId = orderToTableMap.get(item.order_id)
+          if (tableId) hasToFollowMap.set(tableId, true)
+        }
+      }
     }
 
     const enrichedTables = (tables || []).map((t: any) => ({
       ...t,
       current_covers: coversMap.get(t.id) ?? null,
+      has_to_follow: hasToFollowMap.get(t.id) ?? false,
     }))
 
     return NextResponse.json(enrichedTables)

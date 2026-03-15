@@ -7,7 +7,7 @@ import type { DailySalesRecord } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Calendar, TrendingUp, Users, DollarSign, CreditCard, Banknote } from "lucide-react"
+import { ArrowLeft, Calendar, TrendingUp, Users, DollarSign, CreditCard, Banknote, Printer } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -41,6 +41,7 @@ interface TransactionItemDetail {
   id: string
   menu_item_id: string
   menu_name: string
+  tax_rate?: number
   quantity: number
   price: number
   notes?: string
@@ -104,6 +105,12 @@ export default function HistoryPage() {
   const [transactionDetail, setTransactionDetail] = useState<TransactionDetailResponse | null>(null)
   const [transactionDetailLoading, setTransactionDetailLoading] = useState(false)
   const [transactionDetailError, setTransactionDetailError] = useState<string | null>(null)
+  const [billTicketDialogOpen, setBillTicketDialogOpen] = useState(false)
+  const [mealTicketDialogOpen, setMealTicketDialogOpen] = useState(false)
+  const [mealTicketMealsCount, setMealTicketMealsCount] = useState(3)
+  const [mealTicketTotal, setMealTicketTotal] = useState("")
+  const [mealTicketIncludeTax, setMealTicketIncludeTax] = useState(true)
+  const [mealTicketTaxRate, setMealTicketTaxRate] = useState<10 | 20>(10)
 
   useEffect(() => {
     if (isLoading) return
@@ -144,6 +151,8 @@ export default function HistoryPage() {
     setTransactionDetail(null)
     setTransactionDetailError(null)
     setTransactionDetailLoading(true)
+    setBillTicketDialogOpen(false)
+    setMealTicketDialogOpen(false)
 
     try {
       const response = await fetch(`/api/daily-sales/${sale.id}`)
@@ -158,6 +167,229 @@ export default function HistoryPage() {
     } finally {
       setTransactionDetailLoading(false)
     }
+  }
+
+  const formatCurrency = (value: number) => `${Number(value || 0).toFixed(2)} €`
+
+  const escapeHtml = (value: string | undefined | null) =>
+    (value || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+
+  const openPrintWindow = (html: string) => {
+    const printWindow = window.open("", "_blank")
+    if (!printWindow) {
+      alert("Le navigateur a bloqué la fenêtre d'impression. Autorisez les popups puis réessayez.")
+      return
+    }
+
+    printWindow.document.open()
+    printWindow.document.write(html)
+    printWindow.document.close()
+    printWindow.focus()
+    printWindow.onafterprint = () => {
+      printWindow.close()
+    }
+    setTimeout(() => {
+      printWindow.print()
+    }, 150)
+  }
+
+  const buildTicketHtml = (title: string, body: string) => `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(title)}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: monospace; margin: 0; background: #fff; }
+          #ticket-root { padding: 12px; width: 320px; margin: 0 auto; color: #000; background: #fff; display: block; }
+          .center { text-align: center; }
+          .divider { border-top: 1px dashed #000; margin: 8px 0; }
+          .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
+          .item-name { max-width: 70%; word-break: break-word; }
+          .note { font-size: 10px; color: #333; font-style: italic; margin-left: 8px; }
+          .section-title { font-size: 10px; font-weight: bold; margin: 8px 0 2px; text-transform: uppercase; }
+          .complimentary { color: #666; text-decoration: line-through; }
+          .total { border-top: 1px solid #000; margin-top: 8px; padding-top: 6px; font-size: 13px; font-weight: bold; display: flex; justify-content: space-between; }
+          .kv { display: flex; justify-content: space-between; font-size: 11px; margin: 2px 0; gap: 8px; }
+          .footer { text-align: center; margin-top: 12px; font-size: 10px; }
+          .meta { display:flex; justify-content:space-between; font-size:10px; gap:8px; }
+          @media print {
+            html, body { margin: 0; padding: 0; }
+            #ticket-root { padding: 6px; width: auto; display: block; }
+          }
+        </style>
+      </head>
+      <body><div id="ticket-root">${body}</div></body>
+    </html>
+  `
+
+  const getTicketHeaderHtml = () => {
+    const sale = transactionDetail?.sale || selectedTransaction
+    return `
+      <div class="center" style="font-weight:bold;font-size:16px;">RESTAURANT SOPHIA</div>
+      <div class="center" style="font-size:10px;">67 Boulevard de la plage</div>
+      <div class="center" style="font-size:10px;">33970, Cap-Ferret</div>
+      <div class="center" style="font-size:10px;">SIRET : 940 771 488 00027</div>
+      <div class="divider"></div>
+      <div class="meta">
+        <div style="font-weight:bold;font-size:12px;">Table ${escapeHtml(sale?.table_number || "-")}</div>
+        <div>Serveur : ${escapeHtml(sale?.server_name || "-")}</div>
+      </div>
+      <div style="font-size:10px;color:#333;">${escapeHtml(sale?.created_at ? new Date(sale.created_at).toLocaleString("fr-FR") : new Date().toLocaleString("fr-FR"))}</div>
+      <div style="font-size:10px;color:#666;">Réimpression: ${escapeHtml(new Date().toLocaleString("fr-FR"))}</div>
+    `
+  }
+
+  const getTransactionTaxBreakdown = () => {
+    if (!transactionDetail) return { total: 0, subtotal: 0, tax10: 0, tax20: 0 }
+
+    const total = Number(transactionDetail.sale.total_amount || 0)
+    const itemTax = transactionDetail.items.reduce(
+      (acc, item) => {
+        if (item.is_complimentary) return acc
+        const rate = Number(item.tax_rate || 0)
+        const lineTotal = Number(item.price || 0) * Number(item.quantity || 0)
+        const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
+        if (rate === 10) acc.tax10 += lineTax
+        else if (rate === 20) acc.tax20 += lineTax
+        return acc
+      },
+      { tax10: 0, tax20: 0 },
+    )
+
+    const supplementTax = transactionDetail.supplements.reduce(
+      (acc, supplement) => {
+        if (supplement.is_complimentary) return acc
+        const rate = 10
+        const amount = Number(supplement.amount || 0)
+        const lineTax = amount - amount / (1 + rate / 100)
+        acc.tax10 += lineTax
+        return acc
+      },
+      { tax10: 0, tax20: 0 },
+    )
+
+    const tax10 = itemTax.tax10 + supplementTax.tax10
+    const tax20 = itemTax.tax20 + supplementTax.tax20
+    const subtotal = Math.max(0, total - tax10 - tax20)
+
+    return { total, subtotal, tax10, tax20 }
+  }
+
+  const buildHistoryBillTicketHtml = () => {
+    if (!transactionDetail) return ""
+    const { total, subtotal, tax10, tax20 } = getTransactionTaxBreakdown()
+
+    const itemsHtml = transactionDetail.items
+      .map((item) => {
+        const lineTotal = item.is_complimentary ? 0 : Number(item.line_total || 0)
+        return `
+          <div>
+            <div class="row ${item.is_complimentary ? "complimentary" : ""}">
+              <span class="item-name">${item.quantity}x ${escapeHtml(item.menu_name)}${item.is_complimentary ? " (OFFERT)" : ""}</span>
+              <span>${formatCurrency(lineTotal)}</span>
+            </div>
+            ${item.notes ? `<div class="note">↳ ${escapeHtml(item.notes)}</div>` : ""}
+          </div>
+        `
+      })
+      .join("")
+
+    const supplementsHtml =
+      transactionDetail.supplements.length === 0
+        ? ""
+        : `
+          <div class="section-title">Suppléments</div>
+          ${transactionDetail.supplements
+            .map((supplement) => {
+              const lineTotal = supplement.is_complimentary ? 0 : Number(supplement.amount || 0)
+              return `
+                <div>
+                  <div class="row ${supplement.is_complimentary ? "complimentary" : ""}">
+                    <span class="item-name">${escapeHtml(supplement.name)}${supplement.is_complimentary ? " (OFFERT)" : ""}</span>
+                    <span>${formatCurrency(lineTotal)}</span>
+                  </div>
+                  ${supplement.notes ? `<div class="note">↳ ${escapeHtml(supplement.notes)}</div>` : ""}
+                </div>
+              `
+            })
+            .join("")}
+        `
+
+    const body = `
+      ${getTicketHeaderHtml()}
+      <div style="margin: 10px 0;">
+        ${itemsHtml}
+        ${supplementsHtml}
+      </div>
+      <div class="kv"><span>Sous total</span><span>${formatCurrency(subtotal)}</span></div>
+      <div class="kv"><span>TVA 10%</span><span>${formatCurrency(tax10)}</span></div>
+      <div class="kv"><span>TVA 20%</span><span>${formatCurrency(tax20)}</span></div>
+      <div class="total">
+        <span>TOTAL</span>
+        <span>${formatCurrency(total)}</span>
+      </div>
+      <div class="divider"></div>
+      <div class="footer">Réimpression ticket addition</div>
+      <div class="footer">Merci de votre visite chez SOPHIA</div>
+    `
+
+    return buildTicketHtml(`Réimpression addition - Table ${transactionDetail.sale.table_number || "-"}`, body)
+  }
+
+  const buildHistoryMealTicketHtml = () => {
+    const total = Math.max(0, Number.parseFloat(mealTicketTotal) || 0)
+    const rate = Number(mealTicketTaxRate)
+    const taxAmount = mealTicketIncludeTax && rate > 0 ? total - total / (1 + rate / 100) : 0
+    const subtotal = mealTicketIncludeTax ? Math.max(0, total - taxAmount) : total
+    const mealsCount = Math.max(1, mealTicketMealsCount || 1)
+
+    const body = `
+      ${getTicketHeaderHtml()}
+      <div class="center" style="font-weight:bold;font-size:14px;margin-top:6px;">TICKET REPAS</div>
+      <div style="margin: 10px 0;">
+        <div class="row">
+          <span class="item-name">${mealsCount} repas</span>
+          <span>${formatCurrency(total)}</span>
+        </div>
+        <div class="note">Ticket simplifié sans détail des articles</div>
+      </div>
+      ${
+        mealTicketIncludeTax
+          ? `
+            <div class="kv"><span>Sous total HT</span><span>${formatCurrency(subtotal)}</span></div>
+            <div class="kv"><span>TVA ${rate}%</span><span>${formatCurrency(taxAmount)}</span></div>
+          `
+          : `<div class="kv"><span>TVA</span><span>Non affichée</span></div>`
+      }
+      <div class="total">
+        <span>TOTAL</span>
+        <span>${formatCurrency(total)}</span>
+      </div>
+      <div class="divider"></div>
+      <div class="footer">Réimpression ticket repas</div>
+    `
+
+    return buildTicketHtml(`Réimpression ticket repas - Table ${transactionDetail?.sale.table_number || "-"}`, body)
+  }
+
+  const openMealTicketPreview = () => {
+    if (!transactionDetail) return
+    setMealTicketMealsCount(3)
+    setMealTicketTotal(Number(transactionDetail.sale.total_amount || 0).toFixed(2))
+    setMealTicketIncludeTax(true)
+    setMealTicketTaxRate(10)
+    setMealTicketDialogOpen(true)
+  }
+
+  const openBillTicketPreview = () => {
+    if (!transactionDetail) return
+    setBillTicketDialogOpen(true)
   }
 
   if (isLoading || (user?.role === "manager" && loading)) {
@@ -442,6 +674,8 @@ export default function HistoryPage() {
             setTransactionDetail(null)
             setTransactionDetailError(null)
             setTransactionDetailLoading(false)
+            setBillTicketDialogOpen(false)
+            setMealTicketDialogOpen(false)
           }
         }}
       >
@@ -461,6 +695,25 @@ export default function HistoryPage() {
             <div className="py-6 text-center text-red-400">{transactionDetailError}</div>
           ) : transactionDetail ? (
             <div className="space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Button
+                  onClick={openBillTicketPreview}
+                  variant="outline"
+                  className="bg-slate-900 border-slate-600 text-white hover:bg-slate-700"
+                >
+                  <Printer className="h-4 w-4 mr-2" />
+                  Ticket addition
+                </Button>
+                <Button
+                  onClick={openMealTicketPreview}
+                  variant="outline"
+                  className="bg-slate-900 border-slate-600 text-white hover:bg-slate-700"
+                >
+                  <Users className="h-4 w-4 mr-2" />
+                  Ticket repas
+                </Button>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <Card className="bg-slate-900 border-slate-700 p-3">
                   <p className="text-xs text-slate-400 mb-1">Montant transaction</p>
@@ -586,6 +839,130 @@ export default function HistoryPage() {
           ) : (
             <div className="py-6 text-center text-slate-400">Aucun détail disponible.</div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={mealTicketDialogOpen} onOpenChange={setMealTicketDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-3xl max-h-[90dvh] overflow-y-auto overscroll-contain">
+          <DialogHeader>
+            <DialogTitle>Ticket repas - Réimpression</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Table {transactionDetail?.sale.table_number || "-"} • transaction du{" "}
+              {transactionDetail?.sale.created_at
+                ? new Date(transactionDetail.sale.created_at).toLocaleString("fr-FR")
+                : "-"}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm">Nombre de repas</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  max="30"
+                  value={mealTicketMealsCount}
+                  onChange={(e) => setMealTicketMealsCount(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                  className="bg-slate-900 border-slate-700 mt-1"
+                />
+              </div>
+
+              <div>
+                <Label className="text-sm">Montant total</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={mealTicketTotal}
+                  onChange={(e) => setMealTicketTotal(e.target.value)}
+                  className="bg-slate-900 border-slate-700 mt-1"
+                  placeholder="0.00"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <input
+                  id="history-meal-tax"
+                  type="checkbox"
+                  checked={mealTicketIncludeTax}
+                  onChange={(e) => setMealTicketIncludeTax(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-500 bg-slate-900"
+                />
+                <Label htmlFor="history-meal-tax" className="text-sm cursor-pointer">
+                  Afficher le détail TVA
+                </Label>
+              </div>
+
+              <div>
+                <Label className="text-sm">Taux de TVA</Label>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    type="button"
+                    variant={mealTicketTaxRate === 10 ? "default" : "outline"}
+                    className={
+                      mealTicketTaxRate === 10
+                        ? "bg-blue-600 hover:bg-blue-700"
+                        : "bg-slate-900 border-slate-700 text-white"
+                    }
+                    onClick={() => setMealTicketTaxRate(10)}
+                    disabled={!mealTicketIncludeTax}
+                  >
+                    10%
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={mealTicketTaxRate === 20 ? "default" : "outline"}
+                    className={
+                      mealTicketTaxRate === 20
+                        ? "bg-blue-600 hover:bg-blue-700"
+                        : "bg-slate-900 border-slate-700 text-white"
+                    }
+                    onClick={() => setMealTicketTaxRate(20)}
+                    disabled={!mealTicketIncludeTax}
+                  >
+                    20%
+                  </Button>
+                </div>
+              </div>
+
+              <Button
+                onClick={() => openPrintWindow(buildHistoryMealTicketHtml())}
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={(Number.parseFloat(mealTicketTotal) || 0) <= 0}
+              >
+                <Printer className="h-4 w-4 mr-2" />
+                Imprimer le ticket repas
+              </Button>
+            </div>
+
+            <div className="bg-white rounded border border-slate-600 overflow-hidden">
+              <iframe title="Aperçu ticket repas historique" srcDoc={buildHistoryMealTicketHtml()} className="w-full h-[45vh] sm:h-[60vh] bg-white pointer-events-none sm:pointer-events-auto" />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={billTicketDialogOpen} onOpenChange={setBillTicketDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-4xl max-h-[90dvh] overflow-y-auto overscroll-contain">
+          <DialogHeader>
+            <DialogTitle>Aperçu ticket addition - Table {transactionDetail?.sale.table_number || "-"}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="bg-white rounded border border-slate-600 overflow-hidden">
+              <iframe title="Aperçu ticket addition historique" srcDoc={buildHistoryBillTicketHtml()} className="w-full h-[45vh] sm:h-[60vh] bg-white pointer-events-none sm:pointer-events-auto" />
+            </div>
+            <div className="space-y-4">
+              <p className="text-sm text-slate-300">Cet aperçu correspond au ticket addition de la transaction sélectionnée.</p>
+              <Button
+                onClick={() => openPrintWindow(buildHistoryBillTicketHtml())}
+                className="w-full bg-blue-600 hover:bg-blue-700"
+              >
+                <Printer className="h-4 w-4 mr-2" />
+                Imprimer le ticket addition
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

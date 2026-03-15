@@ -28,6 +28,9 @@ import {
   type UserFloorPlanAssignments,
 } from "@/lib/floor-plan-layouts"
 import { toast } from "@/components/ui/use-toast"
+import { sortTablesForDisplay } from "@/lib/table-sort"
+
+type TableVisualStatus = "available" | "occupied" | "occupied_to_follow" | "reserved"
 
 export default function FloorPlanPage() {
   const { user, logout, isLoading } = useAuth()
@@ -299,17 +302,21 @@ export default function FloorPlanPage() {
     }
   }
 
-  const getTableStatus = (table: Table): "available" | "occupied" | "reserved" => {
-    const status = table.status === "occupied" ? "occupied" : 
-                  (reservationsByTable[table.id] || []).length > 0 ? "reserved" : "available"
+  const getTableStatus = (table: Table): TableVisualStatus => {
+    const status =
+      table.status === "occupied"
+        ? table.has_to_follow
+          ? "occupied_to_follow"
+          : "occupied"
+        : (reservationsByTable[table.id] || []).length > 0
+          ? "reserved"
+          : "available"
     return status
   }
 
   const handleTableClick = async (table: Table) => {
     const status = getTableStatus(table)
-    if (status === "available") {
-      router.push(`/order/${table.id}`)
-    } else if (status === "occupied") {
+    if (status === "available" || status === "occupied" || status === "occupied_to_follow") {
       router.push(`/order/${table.id}`)
     } else if (status === "reserved") {
       // Open inline reservation editor for the reserved table
@@ -538,11 +545,7 @@ export default function FloorPlanPage() {
   }
 
   const sortTablesByNumber = (tables: Table[]) => {
-    return tables.sort((a, b) => {
-      const numA = Number.parseInt(a.table_number.substring(1))
-      const numB = Number.parseInt(b.table_number.substring(1))
-      return numA - numB
-    })
+    return sortTablesForDisplay(tables)
   }
 
   const filterTables = (tables: Table[]) => {
@@ -550,10 +553,12 @@ export default function FloorPlanPage() {
     return tables.filter((table) => table.table_number.toLowerCase().includes(searchQuery.toLowerCase()))
   }
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: TableVisualStatus) => {
     switch (status) {
       case "available":
         return "bg-green-600 hover:bg-green-700 border-green-500"
+      case "occupied_to_follow":
+        return "bg-pink-500 hover:bg-pink-600 border-pink-400"
       case "occupied":
         return "bg-red-600 hover:bg-red-700 border-red-500"
       case "reserved":
@@ -563,10 +568,12 @@ export default function FloorPlanPage() {
     }
   }
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: TableVisualStatus) => {
     switch (status) {
       case "available":
         return "Libre"
+      case "occupied_to_follow":
+        return "Occupée (à suivre)"
       case "occupied":
         return "Occupée"
       case "reserved":
@@ -835,9 +842,10 @@ export default function FloorPlanPage() {
   // ─── Visual layout rendering ───
 
   const renderVisualLayout = (layout: VisualFloorPlan) => {
-    const getStatusColorVisual = (status: string) => {
+    const getStatusColorVisual = (status: TableVisualStatus) => {
       switch (status) {
         case "available": return "#16a34a"
+        case "occupied_to_follow": return "#ec4899"
         case "occupied": return "#dc2626"
         case "reserved": return "#ca8a04"
         default: return "#475569"
@@ -1061,7 +1069,7 @@ export default function FloorPlanPage() {
                           <div className="text-sm sm:text-base font-semibold">
                             {(() => {
                               const s = getTableStatus(table)
-                              return s === "available" ? "Libre" : s === "occupied" ? "Occupée" : "Réservée"
+                              return getStatusText(s)
                             })()}
                           </div>
                         </div>
@@ -1162,6 +1170,10 @@ export default function FloorPlanPage() {
         <div className="flex items-center gap-1.5 sm:gap-2">
           <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-red-600"></div>
           <span className="text-xs sm:text-sm text-slate-700">Occupée</span>
+        </div>
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-pink-500"></div>
+          <span className="text-xs sm:text-sm text-slate-700">Occupée (à suivre)</span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
           <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-yellow-600"></div>

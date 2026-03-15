@@ -867,12 +867,12 @@ export default function BillPage() {
             </Badge>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="grid w-full sm:w-auto grid-cols-2 gap-2">
           <Button
             onClick={openBillPreview}
             variant="outline"
             size="sm"
-            className="bg-slate-800 text-white border-slate-700"
+            className="bg-slate-800 text-white border-slate-700 w-full"
           >
             <Printer className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
             <span className="text-xs sm:text-sm">Ticket addition</span>
@@ -881,7 +881,7 @@ export default function BillPage() {
             onClick={openMealTicketPreview}
             variant="outline"
             size="sm"
-            className="bg-slate-800 text-white border-slate-700"
+            className="bg-slate-800 text-white border-slate-700 w-full"
           >
             <Users className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
             <span className="text-xs sm:text-sm">Ticket repas</span>
@@ -1247,13 +1247,13 @@ export default function BillPage() {
       </div>
 
       <Dialog open={billPreviewDialogOpen} onOpenChange={setBillPreviewDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-4xl">
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-4xl max-h-[90dvh] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle>Aperçu ticket addition - Table {table?.table_number}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="bg-white rounded border border-slate-600 overflow-hidden">
-              <iframe title="Aperçu ticket addition" srcDoc={billTicketHtml} className="w-full h-[60vh] bg-white" />
+              <iframe title="Aperçu ticket addition" srcDoc={billTicketHtml} className="w-full h-[45vh] sm:h-[60vh] bg-white pointer-events-none sm:pointer-events-auto" />
             </div>
             <div className="space-y-4">
               <p className="text-sm text-slate-300">
@@ -1293,7 +1293,7 @@ export default function BillPage() {
       </Dialog>
 
       <Dialog open={mealTicketDialogOpen} onOpenChange={setMealTicketDialogOpen}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-4xl">
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-4xl max-h-[90dvh] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle>Ticket repas - Aperçu et impression</DialogTitle>
           </DialogHeader>
@@ -1399,7 +1399,7 @@ export default function BillPage() {
             </div>
 
             <div className="bg-white rounded border border-slate-600 overflow-hidden">
-              <iframe title="Aperçu ticket repas" srcDoc={mealTicketHtml} className="w-full h-[60vh] bg-white" />
+              <iframe title="Aperçu ticket repas" srcDoc={mealTicketHtml} className="w-full h-[45vh] sm:h-[60vh] bg-white pointer-events-none sm:pointer-events-auto" />
             </div>
           </div>
         </DialogContent>

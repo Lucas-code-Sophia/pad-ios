@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert } from "lucide-react"
+import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert, CheckCircle2, AlertTriangle, XCircle, Info } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -45,6 +45,15 @@ interface SupplementItem {
   notes?: string
   isComplimentary?: boolean
   complimentaryReason?: string
+}
+
+type DispatchPhase = "pending" | "to_follow_1" | "to_follow_2"
+type SendFeedbackVariant = "success" | "warning" | "error" | "info"
+
+interface SendFeedback {
+  title: string
+  lines: string[]
+  variant: SendFeedbackVariant
 }
 
 export default function OrderPage() {
@@ -104,6 +113,8 @@ export default function OrderPage() {
   const [hasOrderedWineBottle, setHasOrderedWineBottle] = useState(false)
   const [showAllergens, setShowAllergens] = useState(false)
   const [allergenMap, setAllergenMap] = useState<Record<string, Array<{ id: string; name: string; emoji: string }>>>({})
+  const [sendFeedback, setSendFeedback] = useState<SendFeedback | null>(null)
+  const sendFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Timer : temps écoulé depuis l'ouverture de la commande
   useEffect(() => {
@@ -140,6 +151,104 @@ export default function OrderPage() {
   const isVinBouteilleItem = (item: MenuItem) => item.category === "Vins Bouteille"
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
+
+  const showSendFeedback = (feedback: SendFeedback) => {
+    if (sendFeedbackTimeoutRef.current) {
+      clearTimeout(sendFeedbackTimeoutRef.current)
+    }
+    setSendFeedback(feedback)
+    sendFeedbackTimeoutRef.current = setTimeout(() => {
+      setSendFeedback(null)
+      sendFeedbackTimeoutRef.current = null
+    }, 4500)
+  }
+
+  const getPhaseLabel = (phase: DispatchPhase) => {
+    if (phase === "pending") return "Commande immédiate"
+    if (phase === "to_follow_1") return "À suivre 1"
+    return "À suivre 2"
+  }
+
+  const summarizeDispatchByStation = (items: CartItem[]) => {
+    let kitchen = 0
+    let bar = 0
+
+    for (const item of items) {
+      const qty = Math.max(0, item.quantity || 0)
+      const isBar = item.menuItem?.routing === "bar" || item.menuItem?.type === "drink"
+      if (isBar) {
+        bar += qty
+      } else {
+        kitchen += qty
+      }
+    }
+
+    return { kitchen, bar }
+  }
+
+  const getRemainingFollowSummary = (items: CartItem[]) => {
+    let follow1 = 0
+    let follow2 = 0
+
+    for (const item of items) {
+      const qty = Math.max(0, item.quantity || 0)
+      if (item.status === "to_follow_1") follow1 += qty
+      if (item.status === "to_follow_2") follow2 += qty
+    }
+
+    if (follow1 > 0 && follow2 > 0) {
+      return `Restent ${follow1} plat${follow1 > 1 ? "s" : ""} en à suivre 1 et ${follow2} plat${follow2 > 1 ? "s" : ""} en à suivre 2`
+    }
+    if (follow1 > 0) {
+      return `Restent ${follow1} plat${follow1 > 1 ? "s" : ""} en à suivre 1`
+    }
+    if (follow2 > 0) {
+      return `Restent ${follow2} plat${follow2 > 1 ? "s" : ""} en à suivre 2`
+    }
+    return ""
+  }
+
+  const buildDispatchFeedback = (params: {
+    phase: DispatchPhase
+    sentItems: CartItem[]
+    remainingItems?: CartItem[]
+    supplementsSent?: number
+  }): SendFeedback => {
+    const { phase, sentItems, remainingItems = [], supplementsSent = 0 } = params
+    const { kitchen, bar } = summarizeDispatchByStation(sentItems)
+    const lines: string[] = [`Étape envoyée: ${getPhaseLabel(phase)}`]
+
+    if (kitchen > 0) {
+      lines.push(`${kitchen} plat${kitchen > 1 ? "s" : ""} envoyé${kitchen > 1 ? "s" : ""} en cuisine`)
+    }
+
+    if (bar > 0) {
+      lines.push(`${bar} boisson${bar > 1 ? "s" : ""} envoyée${bar > 1 ? "s" : ""} au bar`)
+    }
+
+    if (supplementsSent > 0) {
+      lines.push(`${supplementsSent} supplément${supplementsSent > 1 ? "s" : ""} enregistré${supplementsSent > 1 ? "s" : ""}`)
+    }
+
+    const remainingText = getRemainingFollowSummary(remainingItems)
+    if (remainingText) {
+      lines.push(remainingText)
+    }
+
+    return {
+      title: "Envoi effectué",
+      lines,
+      variant: "success",
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (sendFeedbackTimeoutRef.current) {
+        clearTimeout(sendFeedbackTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -840,16 +949,28 @@ export default function OrderPage() {
 
     // Séparer ce qui doit être envoyé immédiatement vs ce qui reste en "à suivre"
     let itemsToSend = cart.filter((item) => item.status === "pending")
-    const itemsToKeep = cart.filter((item) => item.status !== "pending") // Les "à suivre"
-    
-    // Si aucun article "pending" mais qu'il y a des "à suivre 1", les envoyer
+    let sendPhase: DispatchPhase | null = itemsToSend.length > 0 ? "pending" : null
+
+    // Si aucun article "pending", essayer d'envoyer les "à suivre" étape par étape
     if (itemsToSend.length === 0) {
       const toFollow1Items = cart.filter((item) => item.status === "to_follow_1")
       if (toFollow1Items.length > 0) {
         itemsToSend = toFollow1Items
+        sendPhase = "to_follow_1"
         console.log("[v0] No pending items, sending to_follow_1 items instead")
+      } else {
+        const toFollow2Items = cart.filter((item) => item.status === "to_follow_2")
+        if (toFollow2Items.length > 0) {
+          itemsToSend = toFollow2Items
+          sendPhase = "to_follow_2"
+          console.log("[v0] No pending/to_follow_1 items, sending to_follow_2 items instead")
+        }
       }
     }
+
+    const itemsToKeep = cart.filter(
+      (item) => !itemsToSend.some((sendItem) => sendItem.cartItemId === item.cartItemId),
+    )
     
     // N'envoyer les suppléments que s'il y a des plats à envoyer
     const supplementsToSend = itemsToSend.length > 0 ? supplements : []
@@ -862,7 +983,11 @@ export default function OrderPage() {
     console.log("- Supplements to send:", supplementsToSend.length)
 
     if (itemsToSend.length === 0 && supplementsToSend.length === 0) {
-      alert("Aucun plat à envoyer")
+      showSendFeedback({
+        title: "Rien à envoyer",
+        lines: ["Aucun plat en attente pour cette étape."],
+        variant: "warning",
+      })
       return
     }
 
@@ -911,7 +1036,14 @@ export default function OrderPage() {
     if (!isOnline) {
       savePendingOrder(orderData)
       setCart(itemsToKeep) // Garder seulement les "à suivre"
-      alert("Commande enregistrée. Elle sera envoyée dès que la connexion sera rétablie.")
+      if (supplementsToSend.length > 0) {
+        setSupplements([])
+      }
+      showSendFeedback({
+        title: "Mode hors ligne",
+        lines: ["Commande enregistrée. Elle sera envoyée dès que la connexion sera rétablie."],
+        variant: "info",
+      })
       return
     }
 
@@ -931,7 +1063,16 @@ export default function OrderPage() {
           setSupplements([])
         }
 
-        alert(`${getFollowNumberText()} envoyés à la cuisine !`)
+        if (sendPhase) {
+          showSendFeedback(
+            buildDispatchFeedback({
+              phase: sendPhase,
+              sentItems: itemsToSend,
+              remainingItems: itemsToKeep,
+              supplementsSent: supplementsToSend.length,
+            }),
+          )
+        }
       } else {
         throw new Error("Failed to create order")
       }
@@ -942,37 +1083,49 @@ export default function OrderPage() {
       // Vider le panier même en erreur - la BDD est la source de vérité
       setCart([])
       console.log("[v0] Order saved offline and cart cleared")
-      alert("Erreur réseau. Commande enregistrée et sera envoyée automatiquement.")
+      showSendFeedback({
+        title: "Erreur réseau",
+        lines: ["Commande enregistrée. Elle sera envoyée automatiquement dès le retour réseau."],
+        variant: "warning",
+      })
     }
   }
 
   const fireToFollowItems = async () => {
     try {
-      let toFollowItems = []
-      let followNumber = ""
+      let toFollowItems: CartItem[] = []
+      let sendPhase: DispatchPhase | null = null
       
       // D'abord essayer d'envoyer les plats normaux (pending)
       toFollowItems = cart.filter((item) => item.status === "pending")
       if (toFollowItems.length > 0) {
-        followNumber = "plats normaux"
+        sendPhase = "pending"
       } else {
         // Si pas de plats normaux, envoyer les "À suivre 1"
         toFollowItems = cart.filter((item) => item.status === "to_follow_1")
         if (toFollowItems.length > 0) {
-          followNumber = "À suivre 1"
+          sendPhase = "to_follow_1"
         } else {
           // Si pas de "À suivre 1", envoyer les "À suivre 2"
           toFollowItems = cart.filter((item) => item.status === "to_follow_2")
           if (toFollowItems.length > 0) {
-            followNumber = "À suivre 2"
+            sendPhase = "to_follow_2"
           }
         }
       }
       
       if (toFollowItems.length === 0) {
-        alert("Aucun plat à envoyer")
+        showSendFeedback({
+          title: "Rien à envoyer",
+          lines: ["Aucun plat en attente pour cette étape."],
+          variant: "warning",
+        })
         return
       }
+
+      const remainingItems = cart.filter(
+        (item) => !toFollowItems.some((firedItem) => firedItem.cartItemId === item.cartItemId),
+      )
 
       // Utiliser /api/orders (c'est lui qui passe en "fired" + crée les tickets)
       // On envoie tous les items du panier, en marquant uniquement le batch choisi en "fired".
@@ -1006,11 +1159,25 @@ export default function OrderPage() {
 
       if (response.ok) {
         await fetchOrderData()
-        alert(`${followNumber} envoyés à la cuisine !`)
+        if (sendPhase) {
+          showSendFeedback(
+            buildDispatchFeedback({
+              phase: sendPhase,
+              sentItems: toFollowItems,
+              remainingItems,
+            }),
+          )
+        }
+      } else {
+        throw new Error("Failed to fire follow items")
       }
     } catch (error) {
       console.error("[v0] Error firing to follow items:", error)
-      alert("Erreur lors de l'envoi des plats")
+      showSendFeedback({
+        title: "Échec de l'envoi",
+        lines: ["Erreur lors de l'envoi des plats."],
+        variant: "error",
+      })
     }
   }
 
@@ -1034,53 +1201,6 @@ export default function OrderPage() {
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
     existingItems.reduce((sum, item) => sum + (item.is_complimentary ? 0 : item.price * item.quantity), 0)
   const toFollowCount = cart.filter((item) => item.status === "to_follow_1" || item.status === "to_follow_2").length
-  
-  // Compter les plats et boissons à envoyer
-  const getItemsToSendText = () => {
-    const itemsToSend = cart.filter((item) => item.status === "pending")
-    const toFollow1Items = cart.filter((item) => item.status === "to_follow_1")
-    const toFollow2Items = cart.filter((item) => item.status === "to_follow_2")
-    
-    let itemsText = ""
-    let supplementsText = ""
-    
-    if (itemsToSend.length > 0) {
-      itemsText = `${itemsToSend.length} plat${itemsToSend.length > 1 ? 's' : ''}`
-    } else if (toFollow1Items.length > 0 && toFollow2Items.length > 0) {
-      // Les deux types de "à suivre" sont présents
-      itemsText = `${toFollow1Items.length} plat${toFollow1Items.length > 1 ? 's' : ''} à suivre 1 et ${toFollow2Items.length} plat${toFollow2Items.length > 1 ? 's' : ''} à suivre 2`
-    } else if (toFollow1Items.length > 0) {
-      // Seulement des "à suivre 1"
-      itemsText = `${toFollow1Items.length} plat${toFollow1Items.length > 1 ? 's' : ''} à suivre 1`
-    } else if (toFollow2Items.length > 0) {
-      // Seulement des "à suivre 2"
-      itemsText = `${toFollow2Items.length} plat${toFollow2Items.length > 1 ? 's' : ''} à suivre 2`
-    }
-    
-    if (supplements.length > 0) {
-      supplementsText = ` et ${supplements.length} boisson${supplements.length > 1 ? 's' : ''}`
-    }
-    
-    return itemsText + supplementsText
-  }
-
-  const getFollowNumberText = () => {
-    const itemsToSend = cart.filter((item) => item.status === "pending")
-    const toFollow1Items = cart.filter((item) => item.status === "to_follow_1")
-    const toFollow2Items = cart.filter((item) => item.status === "to_follow_2")
-    
-    if (itemsToSend.length > 0) {
-      return `${itemsToSend.length} plat${itemsToSend.length > 1 ? 's' : ''}`
-    } else if (toFollow1Items.length > 0 && toFollow2Items.length > 0) {
-      return `${toFollow1Items.length} plat${toFollow1Items.length > 1 ? 's' : ''} à suivre 1 et ${toFollow2Items.length} plat${toFollow2Items.length > 1 ? 's' : ''} à suivre 2`
-    } else if (toFollow1Items.length > 0) {
-      return `${toFollow1Items.length} plat${toFollow1Items.length > 1 ? 's' : ''} à suivre 1`
-    } else if (toFollow2Items.length > 0) {
-      return `${toFollow2Items.length} plat${toFollow2Items.length > 1 ? 's' : ''} à suivre 2`
-    }
-    
-    return ""
-  }
 
   const canAccessBill = user?.role === "manager" || Boolean(user?.can_access_bill)
 
@@ -1122,9 +1242,73 @@ export default function OrderPage() {
     }
   }
 
+  const getSendFeedbackTheme = (variant: SendFeedbackVariant) => {
+    switch (variant) {
+      case "success":
+        return {
+          container: "bg-emerald-900/95 border-emerald-500/60 text-emerald-50",
+          icon: CheckCircle2,
+          iconClass: "text-emerald-300",
+        }
+      case "warning":
+        return {
+          container: "bg-amber-900/95 border-amber-500/60 text-amber-50",
+          icon: AlertTriangle,
+          iconClass: "text-amber-300",
+        }
+      case "error":
+        return {
+          container: "bg-red-900/95 border-red-500/60 text-red-50",
+          icon: XCircle,
+          iconClass: "text-red-300",
+        }
+      default:
+        return {
+          container: "bg-blue-900/95 border-blue-500/60 text-blue-50",
+          icon: Info,
+          iconClass: "text-blue-300",
+        }
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-900 p-2 sm:p-4">
       <OfflineIndicator />
+      {sendFeedback && (
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[120] w-[calc(100%-1rem)] sm:w-[28rem] animate-in fade-in-0 slide-in-from-top-2 duration-300">
+          {(() => {
+            const theme = getSendFeedbackTheme(sendFeedback.variant)
+            const Icon = theme.icon
+            return (
+              <div className={`rounded-xl border shadow-2xl backdrop-blur px-4 py-3 ${theme.container}`}>
+                <div className="flex items-start gap-3">
+                  <Icon className={`h-5 w-5 mt-0.5 shrink-0 ${theme.iconClass}`} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm sm:text-base font-semibold">{sendFeedback.title}</p>
+                    {sendFeedback.lines.length > 0 && (
+                      <div className="mt-1 space-y-0.5">
+                        {sendFeedback.lines.map((line, index) => (
+                          <p key={`${line}-${index}`} className="text-xs sm:text-sm opacity-95">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSendFeedback(null)}
+                    className="text-white/80 hover:text-white text-sm leading-none px-1"
+                    aria-label="Fermer"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+      )}
 
       {/* Header */}
       <div className="mb-3 sm:mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-0">
