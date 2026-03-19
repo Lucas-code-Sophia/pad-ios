@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert, CheckCircle2, AlertTriangle, XCircle, Info } from "lucide-react"
+import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert, CheckCircle2, AlertTriangle, XCircle, Info, Search } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -29,6 +29,7 @@ const generateUniqueId = (productName: string) => {
 interface CartItem {
   id: string // ID du panier (React)
   cartItemId: string // ID unique pour la BDD
+  menuItemId: string
   menuItem: MenuItem | null // Peut être null si non trouvé
   quantity: number
   status: "pending" | "to_follow_1" | "to_follow_2" | "fired" | "completed"
@@ -46,6 +47,59 @@ interface SupplementItem {
   isComplimentary?: boolean
   complimentaryReason?: string
 }
+
+interface CustomMenuItemFormState {
+  name: string
+  price: string
+}
+
+type CustomMenuItemKind = "dish" | "drink" | "alcohol"
+
+const CUSTOM_MENU_ITEM_PRESETS: Record<
+  CustomMenuItemKind,
+  {
+    label: string
+    defaultName: string
+    taxRate: 10 | 20
+    routing: "kitchen" | "bar"
+    categoryKeywords: string[]
+  }
+> = {
+  dish: {
+    label: "Divers plat",
+    defaultName: "Divers plat",
+    taxRate: 10,
+    routing: "kitchen",
+    categoryKeywords: ["plat"],
+  },
+  drink: {
+    label: "Divers boisson",
+    defaultName: "Divers boisson",
+    taxRate: 10,
+    routing: "bar",
+    categoryKeywords: ["soft", "boisson"],
+  },
+  alcohol: {
+    label: "Divers alcool",
+    defaultName: "Divers alcool",
+    taxRate: 20,
+    routing: "bar",
+    categoryKeywords: ["alcool"],
+  },
+}
+
+const getDefaultSupplementForm = () => ({
+  name: "",
+  amount: "",
+  notes: "",
+  isComplimentary: false,
+  complimentaryReason: "",
+})
+
+const getDefaultCustomMenuItemForm = (): CustomMenuItemFormState => ({
+  name: "",
+  price: "",
+})
 
 type DispatchPhase = "pending" | "to_follow_1" | "to_follow_2"
 type SendFeedbackVariant = "success" | "warning" | "error" | "info"
@@ -88,13 +142,11 @@ export default function OrderPage() {
   const [transferTables, setTransferTables] = useState<Table[]>([])
   const [transferLoading, setTransferLoading] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
-  const [supplementForm, setSupplementForm] = useState({
-    name: "",
-    amount: "",
-    notes: "",
-    isComplimentary: false,
-    complimentaryReason: "",
-  })
+  const [supplementForm, setSupplementForm] = useState(getDefaultSupplementForm())
+  const [customMenuItemDialogOpen, setCustomMenuItemDialogOpen] = useState(false)
+  const [customMenuItemKind, setCustomMenuItemKind] = useState<CustomMenuItemKind | null>(null)
+  const [customMenuItemForm, setCustomMenuItemForm] = useState<CustomMenuItemFormState>(getDefaultCustomMenuItemForm())
+  const [customMenuItemSaving, setCustomMenuItemSaving] = useState(false)
   const [complimentaryDialog, setComplimentaryDialog] = useState<{
     open: boolean
     itemId: string | null
@@ -108,10 +160,12 @@ export default function OrderPage() {
   const [elapsedTime, setElapsedTime] = useState("")
   const [coversDialogOpen, setCoversDialogOpen] = useState(false)
   const [coversCount, setCoversCount] = useState<number | null>(null)
+  const [coversUpdating, setCoversUpdating] = useState(false)
   const [vinBouteilleDialogOpen, setVinBouteilleDialogOpen] = useState(false)
   const [vinBouteilleItem, setVinBouteilleItem] = useState<MenuItem | null>(null)
   const [hasOrderedWineBottle, setHasOrderedWineBottle] = useState(false)
   const [showAllergens, setShowAllergens] = useState(false)
+  const [menuSearchQuery, setMenuSearchQuery] = useState("")
   const [allergenMap, setAllergenMap] = useState<Record<string, Array<{ id: string; name: string; emoji: string }>>>({})
   const [sendFeedback, setSendFeedback] = useState<SendFeedback | null>(null)
   const sendFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -144,6 +198,12 @@ export default function OrderPage() {
   }, [currentOrder?.created_at])
 
   const normalizeName = (name: string) => name.trim().toLowerCase().replace(/'/g, "'")
+  const normalizeForSearch = (value: string) =>
+    value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim()
   const menuEnfantOptions = ["Pâtes poulet", "Frites poulet"]
   const siropOptions = ["Menthe", "Citron", "Pêche", "Grenadine"]
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
@@ -151,6 +211,7 @@ export default function OrderPage() {
   const isVinBouteilleItem = (item: MenuItem) => item.category === "Vins Bouteille"
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
+  const getCartItemMenuItemId = (item: CartItem) => item.menuItem?.id || item.menuItemId
 
   const showSendFeedback = (feedback: SendFeedback) => {
     if (sendFeedbackTimeoutRef.current) {
@@ -291,6 +352,7 @@ export default function OrderPage() {
           return {
             id: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
             cartItemId: item.id as string,
+            menuItemId: item.menu_item_id as string,
             menuItem: menuItem || null,
             quantity: item.quantity as number,
             status: item.status as CartItem['status'],
@@ -349,7 +411,7 @@ export default function OrderPage() {
   }
 
   const fetchMenuItems = async () => {
-    const itemsRes = await fetch("/api/menu/items")
+    const itemsRes = await fetch("/api/menu/items", { cache: "no-store" })
     if (itemsRes.ok) {
       const itemsData = await itemsRes.json()
       setMenuItems(itemsData)
@@ -388,7 +450,7 @@ export default function OrderPage() {
           ? Promise.resolve(menuItems)
           : fetchMenuItems()
 
-      const [tableRes, orderRes, currentItems] = await Promise.all([
+      const [tableRes, orderRes, initialItems] = await Promise.all([
         fetch(`/api/tables/${tableId}`),
         fetch(`/api/orders/table/${tableId}`, { cache: "no-store" }),
         currentItemsPromise,
@@ -401,6 +463,19 @@ export default function OrderPage() {
       if (orderRes.ok) {
         const orderData = await orderRes.json()
         if (orderData) {
+          let currentItems = initialItems
+          const hasMissingMenuItems = orderData.items.some(
+            (item: OrderItem) => !currentItems.some((menuItem: MenuItem) => menuItem.id === item.menu_item_id),
+          )
+          if (hasMissingMenuItems) {
+            // Un article peut avoir été créé juste avant l'ajout (cas "Divers"):
+            // on rafraîchit la carte pour éviter "Article inconnu" sans refresh manuel.
+            const refreshedItems = await fetchMenuItems()
+            if (refreshedItems.length > 0) {
+              currentItems = refreshedItems
+            }
+          }
+
           setCurrentOrder(orderData.order)
 
           // Organiser les articles selon leur statut
@@ -418,6 +493,7 @@ export default function OrderPage() {
             return {
               id: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
               cartItemId: item.id, // Utiliser l'ID de la BDD comme référence unique
+              menuItemId: item.menu_item_id,
               menuItem: menuItem || null,
               quantity: item.quantity,
               status: item.status as "pending" | "to_follow_1" | "to_follow_2",
@@ -510,7 +586,7 @@ export default function OrderPage() {
     // - sinon, on insère un nouvel item en BDD
     try {
       const existingPending = cart.find(
-        (i) => i.status === "pending" && i.menuItem?.id === menuItem.id && (!i.notes || i.notes.trim() === ""),
+        (i) => i.status === "pending" && getCartItemMenuItemId(i) === menuItem.id && (!i.notes || i.notes.trim() === ""),
       )
 
       if (existingPending) {
@@ -664,24 +740,54 @@ export default function OrderPage() {
   }
 
   // ── Couverts ──────────────────────────────────────────────────────────
-  const handleCoversConfirm = async (count: number) => {
-    setCoversCount(count)
-    setCoversDialogOpen(false)
+  const getActiveCoversCount = () => {
+    if (coversCount != null && coversCount > 0) return coversCount
+    if (currentOrder?.covers != null && currentOrder.covers > 0) return currentOrder.covers
+    if (table?.current_covers != null && table.current_covers > 0) return table.current_covers
+    if (table?.seats != null && table.seats > 0) return table.seats
+    return 1
+  }
 
-    // Si une commande existe déjà, mettre à jour via PATCH
-    if (currentOrder?.id) {
-      try {
-        await fetch(`/api/orders/table/${tableId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ covers: count }),
-        })
-        await fetchOrderData()
-      } catch (error) {
-        console.error("[v0] Error updating covers:", error)
-      }
+  const hasSavedCovers =
+    (coversCount != null && coversCount > 0) ||
+    (currentOrder?.covers != null && currentOrder.covers > 0) ||
+    (table?.current_covers != null && table.current_covers > 0)
+
+  const handleCoversConfirm = async (count: number, options?: { closeDialog?: boolean }) => {
+    const previousCoversCount = coversCount
+    const previousOrderCovers = currentOrder?.covers ?? null
+
+    setCoversCount(count)
+    setCurrentOrder((prev) => (prev ? { ...prev, covers: count } : prev))
+    if (options?.closeDialog !== false) setCoversDialogOpen(false)
+
+    // Si pas encore de commande, les couverts seront envoyés à la première création de commande
+    if (!currentOrder?.id) return
+
+    try {
+      setCoversUpdating(true)
+      const response = await fetch(`/api/orders/table/${tableId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ covers: count }),
+      })
+      if (!response.ok) throw new Error("Failed to update covers")
+    } catch (error) {
+      console.error("[v0] Error updating covers:", error)
+      // Revenir à l'état précédent si la sauvegarde échoue
+      setCoversCount(previousCoversCount)
+      setCurrentOrder((prev) => (prev ? { ...prev, covers: previousOrderCovers } : prev))
+    } finally {
+      setCoversUpdating(false)
     }
-    // Sinon, covers sera envoyé lors de la création de la première commande
+  }
+
+  const handleCoversQuickAdjust = async (delta: number) => {
+    if (coversUpdating) return
+    const current = getActiveCoversCount()
+    const next = Math.max(1, Math.min(30, current + delta))
+    if (next === current) return
+    await handleCoversConfirm(next, { closeDialog: false })
   }
 
   // ── Vin Bouteille ─────────────────────────────────────────────────────
@@ -729,7 +835,7 @@ export default function OrderPage() {
             orderId: currentOrder?.id,
             items: [{
               cartItemId: cartItemId,
-              menuItemId: item.menuItem?.id || '',
+              menuItemId: getCartItemMenuItemId(item),
               quantity: item.quantity - 1,
               price: getCartItemPrice(item),
               status: item.status, // Garder le même statut
@@ -753,7 +859,7 @@ export default function OrderPage() {
             orderId: currentOrder?.id,
             items: [{
               cartItemId: cartItemId,
-              menuItemId: item.menuItem?.id || '',
+              menuItemId: getCartItemMenuItemId(item),
               quantity: 0, // Quantité 0 = suppression
               price: getCartItemPrice(item),
               status: item.status,
@@ -798,7 +904,7 @@ export default function OrderPage() {
           orderId: currentOrder?.id,
           items: [{
             cartItemId: cartItemId,
-            menuItemId: item.menuItem?.id || '',
+            menuItemId: getCartItemMenuItemId(item),
             quantity: item.quantity,
             price: getCartItemPrice(item),
             status: newStatus, // Nouveau statut
@@ -839,7 +945,7 @@ export default function OrderPage() {
             orderId: currentOrder?.id,
             items: [{
             cartItemId: notesDialog.itemId,
-            menuItemId: item.menuItem?.id || '',
+            menuItemId: getCartItemMenuItemId(item),
             quantity: item.quantity,
             price: getCartItemPrice(item),
             status: item.status,
@@ -862,6 +968,80 @@ export default function OrderPage() {
     setTempNotes("")
   }
 
+  const openSupplementDialog = () => {
+    setSupplementForm(getDefaultSupplementForm())
+    setSupplementDialog(true)
+  }
+
+  const openCustomMenuItemDialog = (kind: CustomMenuItemKind) => {
+    const preset = CUSTOM_MENU_ITEM_PRESETS[kind]
+    setCustomMenuItemKind(kind)
+    setCustomMenuItemForm({
+      name: preset.defaultName,
+      price: "0.00",
+    })
+    setCustomMenuItemDialogOpen(true)
+  }
+
+  const closeCustomMenuItemDialog = () => {
+    setCustomMenuItemDialogOpen(false)
+    setCustomMenuItemKind(null)
+    setCustomMenuItemForm(getDefaultCustomMenuItemForm())
+    setCustomMenuItemSaving(false)
+  }
+
+  const addCustomMenuItem = async () => {
+    if (!customMenuItemKind) return
+    const preset = CUSTOM_MENU_ITEM_PRESETS[customMenuItemKind]
+    const category = categories.find((c) => c.id === selectedCategory)
+    const name = customMenuItemForm.name.trim()
+    const parsedPrice = Number.parseFloat(customMenuItemForm.price)
+
+    if (!category) {
+      alert("Catégorie introuvable.")
+      return
+    }
+    if (!name) {
+      alert("Veuillez saisir un intitulé.")
+      return
+    }
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      alert("Veuillez saisir un montant valide.")
+      return
+    }
+
+    try {
+      setCustomMenuItemSaving(true)
+      const response = await fetch("/api/menu/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          price: parsedPrice,
+          tax_rate: preset.taxRate,
+          category: category.name,
+          routing: preset.routing,
+          status: false, // Masqué de la carte standard, utilisé uniquement pour cette commande
+        }),
+      })
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err?.error || "Création de l'article impossible")
+      }
+
+      const createdItem: MenuItem = await response.json()
+      setMenuItems((prev) => (prev.some((item) => item.id === createdItem.id) ? prev : [...prev, createdItem]))
+      await addItemsToOrder([{ menuItem: createdItem, priceOverride: parsedPrice }])
+      closeCustomMenuItemDialog()
+    } catch (error) {
+      console.error("[v0] Error creating custom menu item:", error)
+      alert("Impossible d'ajouter cet article divers.")
+    } finally {
+      setCustomMenuItemSaving(false)
+    }
+  }
+
   const addSupplement = () => {
     if (
       !supplementForm.name ||
@@ -881,7 +1061,7 @@ export default function OrderPage() {
     }
 
     setSupplements((prev) => [...prev, newSupplement])
-    setSupplementForm({ name: "", amount: "", notes: "", isComplimentary: false, complimentaryReason: "" })
+    setSupplementForm(getDefaultSupplementForm())
     setSupplementDialog(false)
   }
 
@@ -908,9 +1088,9 @@ export default function OrderPage() {
             orderId: currentOrder?.id,
             items: [{
               cartItemId: complimentaryDialog.itemId,
-              menuItemId: item.menuItem?.id || '',
+              menuItemId: getCartItemMenuItemId(item),
               quantity: item.quantity,
-              price: item.menuItem?.price || 0,
+              price: getCartItemPrice(item),
               status: item.status,
               notes: item.notes,
               isComplimentary: !item.isComplimentary, // Inverser le statut
@@ -997,9 +1177,9 @@ export default function OrderPage() {
       if (itemsToSend.some(sendItem => sendItem.cartItemId === item.cartItemId)) {
         return {
           cartItemId: item.cartItemId,
-          menuItemId: item.menuItem?.id || '',
+          menuItemId: getCartItemMenuItemId(item),
           quantity: item.quantity,
-          price: item.menuItem?.price || 0,
+          price: getCartItemPrice(item),
           status: "fired", // Les items envoyés deviennent "fired"
           notes: item.notes,
           isComplimentary: item.isComplimentary || false,
@@ -1009,9 +1189,9 @@ export default function OrderPage() {
       // Les articles "à suivre" gardent leur statut
       return {
         cartItemId: item.cartItemId,
-        menuItemId: item.menuItem?.id || '',
+        menuItemId: getCartItemMenuItemId(item),
         quantity: item.quantity,
-        price: item.menuItem?.price || 0,
+        price: getCartItemPrice(item),
         status: item.status, // Garder le statut "à suivre"
         notes: item.notes,
         isComplimentary: item.isComplimentary || false,
@@ -1133,7 +1313,7 @@ export default function OrderPage() {
         const shouldFire = toFollowItems.some((f) => f.cartItemId === item.cartItemId)
         return {
           cartItemId: item.cartItemId,
-          menuItemId: item.menuItem?.id || "",
+          menuItemId: getCartItemMenuItemId(item),
           quantity: item.quantity,
           price: getCartItemPrice(item),
           status: shouldFire ? "fired" : item.status,
@@ -1195,7 +1375,26 @@ export default function OrderPage() {
     router.push("/floor-plan")
   }
 
-  const filteredItems = menuItems.filter((item) => item.category_id === selectedCategory && item.status !== false)
+  const normalizedSearchQuery = normalizeForSearch(menuSearchQuery)
+  const hasSearchQuery = normalizedSearchQuery.length > 0
+  const selectedCategoryData = categories.find((category) => category.id === selectedCategory) || null
+  const selectedCategoryNameNormalized = normalizeForSearch(selectedCategoryData?.name || "")
+  const visibleCustomMenuPresets = (Object.entries(CUSTOM_MENU_ITEM_PRESETS) as Array<
+    [CustomMenuItemKind, (typeof CUSTOM_MENU_ITEM_PRESETS)[CustomMenuItemKind]]
+  >).filter(([, preset]) => {
+    const categoryMatches = preset.categoryKeywords.some((keyword) => selectedCategoryNameNormalized.includes(keyword))
+    if (!categoryMatches) return false
+    if (!hasSearchQuery) return true
+    const presetLabel = normalizeForSearch(`${preset.label} ${preset.defaultName}`)
+    return presetLabel.includes(normalizedSearchQuery)
+  })
+  const activeCustomMenuPreset = customMenuItemKind ? CUSTOM_MENU_ITEM_PRESETS[customMenuItemKind] : null
+  const filteredItems = menuItems.filter((item) => {
+    if (item.status === false) return false
+    if (!hasSearchQuery && item.category_id !== selectedCategory) return false
+    if (!hasSearchQuery) return true
+    return normalizeForSearch(item.name).includes(normalizedSearchQuery)
+  })
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
@@ -1324,12 +1523,34 @@ export default function OrderPage() {
         <div className="text-center flex-1">
           <h1 className="text-lg sm:text-2xl font-bold text-white">Table {table?.table_number}</h1>
           <div className="flex items-center justify-center gap-2">
-            <button
-              onClick={() => setCoversDialogOpen(true)}
-              className="text-xs sm:text-sm text-slate-400 hover:text-white transition-colors underline-offset-2 hover:underline"
-            >
-              {coversCount != null ? `${coversCount} couverts` : `${table?.seats} places`}
-            </button>
+            <div className="inline-flex items-center rounded-full border border-slate-700 bg-slate-800/80 px-1 py-1">
+              <button
+                type="button"
+                onClick={() => { void handleCoversQuickAdjust(-1) }}
+                disabled={coversUpdating || getActiveCoversCount() <= 1}
+                className="h-7 w-7 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                aria-label="Retirer un couvert"
+              >
+                <Minus className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setCoversDialogOpen(true)}
+                className="px-2 text-xs sm:text-sm text-slate-300 hover:text-white transition-colors underline-offset-2 hover:underline whitespace-nowrap"
+                aria-label="Modifier le nombre de couverts"
+              >
+                {hasSavedCovers ? `${getActiveCoversCount()} couverts` : `${table?.seats} places`}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void handleCoversQuickAdjust(1) }}
+                disabled={coversUpdating || getActiveCoversCount() >= 30}
+                className="h-7 w-7 rounded-full flex items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                aria-label="Ajouter un couvert"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
             {elapsedTime && (
               <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-blue-600/20 text-blue-300 border border-blue-500/30">
                 <Clock className="h-3 w-3" />
@@ -1383,7 +1604,7 @@ export default function OrderPage() {
         {/* Menu Section */}
         <div className="lg:col-span-8">
           {/* Categories + Allergen toggle */}
-          <div className="mb-3 sm:mb-4 flex gap-1.5 sm:gap-2 overflow-x-auto pb-2">
+          <div className="mb-3 sm:mb-4 flex items-center gap-1.5 sm:gap-2 overflow-x-auto pb-2">
             <Button
               onClick={() => setShowAllergens(!showAllergens)}
               size="sm"
@@ -1397,6 +1618,16 @@ export default function OrderPage() {
               <ShieldAlert className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
               Allergènes
             </Button>
+            <div className="relative min-w-[180px] sm:min-w-[260px] flex-shrink-0">
+              <Search className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Input
+                type="search"
+                value={menuSearchQuery}
+                onChange={(e) => setMenuSearchQuery(e.target.value)}
+                placeholder="Rechercher un élément..."
+                className="h-8 sm:h-9 pl-8 sm:pl-9 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 text-xs sm:text-sm"
+              />
+            </div>
             <div className="w-px bg-slate-700 flex-shrink-0" />
           </div>
           <div className="mb-3 sm:mb-4 flex gap-1.5 sm:gap-2 overflow-x-auto pb-2">
@@ -1419,8 +1650,33 @@ export default function OrderPage() {
 
           {/* Menu Items Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-            {filteredItems.map((item) => {
-              const cartItem = cart.find((c) => c.menuItem?.id === item.id && c.status === "pending")
+            {filteredItems.length === 0 && visibleCustomMenuPresets.length === 0 ? (
+              <Card className="col-span-2 sm:col-span-3 p-6 sm:p-8 bg-slate-800 border-slate-700 text-center">
+                <p className="text-slate-300 text-sm sm:text-base">Aucun élément trouvé</p>
+                {hasSearchQuery && (
+                  <p className="text-slate-500 text-xs sm:text-sm mt-1">
+                    Essaie un autre mot-clé ou vide la recherche.
+                  </p>
+                )}
+              </Card>
+            ) : (
+              <>
+                {visibleCustomMenuPresets.map(([kind, preset]) => (
+                  <Card
+                    key={`custom-${kind}`}
+                    className="p-3 sm:p-4 bg-indigo-900/25 border-2 border-indigo-700/70 hover:bg-indigo-900/40 cursor-pointer transition-colors"
+                    onClick={() => openCustomMenuItemDialog(kind)}
+                  >
+                    <div className="text-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 mb-1">Divers</div>
+                      <div className="font-semibold text-sm sm:text-base text-white mb-1">{preset.label}</div>
+                      <div className="text-xs sm:text-sm text-indigo-200">TVA {preset.taxRate}%</div>
+                    </div>
+                  </Card>
+                ))}
+
+                {filteredItems.map((item) => {
+              const cartItem = cart.find((c) => getCartItemMenuItemId(c) === item.id && c.status === "pending")
               const quantity = cartItem?.quantity || 0
               const isOutOfStock = item.out_of_stock
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
@@ -1490,7 +1746,9 @@ export default function OrderPage() {
                   </div>
                 </Card>
               )
-            })}
+                })}
+              </>
+            )}
           </div>
         </div>
 
@@ -1700,7 +1958,7 @@ export default function OrderPage() {
 
             {/* Supplement Button */}
             <Button
-              onClick={() => setSupplementDialog(true)}
+              onClick={openSupplementDialog}
               variant="outline"
               size="sm"
               className="w-full mb-3 sm:mb-4 bg-purple-900/30 border-purple-700 text-purple-300 hover:bg-purple-900/50 text-xs sm:text-sm"
@@ -1743,6 +2001,62 @@ export default function OrderPage() {
           </Card>
         </div>
       </div>
+
+      {/* Custom Menu Item Dialog */}
+      <Dialog
+        open={customMenuItemDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeCustomMenuItemDialog()
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{activeCustomMenuPreset?.label || "Article divers"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="p-2.5 bg-slate-900 border border-slate-700 rounded">
+              <p className="text-xs text-slate-400">
+                TVA appliquée : <span className="text-white font-semibold">{activeCustomMenuPreset?.taxRate ?? 10}%</span>
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="custom-item-name" className="text-slate-300">
+                Intitulé
+              </Label>
+              <Input
+                id="custom-item-name"
+                value={customMenuItemForm.name}
+                onChange={(e) => setCustomMenuItemForm({ ...customMenuItemForm, name: e.target.value })}
+                placeholder="Ex: Cocktail du patron"
+                className="mt-2 bg-slate-900 border-slate-700 text-white"
+              />
+            </div>
+            <div>
+              <Label htmlFor="custom-item-price" className="text-slate-300">
+                Prix (€)
+              </Label>
+              <Input
+                id="custom-item-price"
+                type="number"
+                step="0.5"
+                min="0"
+                value={customMenuItemForm.price}
+                onChange={(e) => setCustomMenuItemForm({ ...customMenuItemForm, price: e.target.value })}
+                placeholder="0.00"
+                className="mt-2 bg-slate-900 border-slate-700 text-white"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeCustomMenuItemDialog} className="bg-slate-700 border-slate-600">
+              Annuler
+            </Button>
+            <Button onClick={addCustomMenuItem} disabled={customMenuItemSaving} className="bg-indigo-600 hover:bg-indigo-700">
+              {customMenuItemSaving ? "Ajout..." : "Ajouter à la commande"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Notes Dialog */}
       <Dialog open={notesDialog.open} onOpenChange={(open) => setNotesDialog({ open, itemId: null })}>
@@ -1908,7 +2222,7 @@ export default function OrderPage() {
               onClick={() => setCoversDialogOpen(false)}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
-              {coversCount != null ? "Fermer" : "Passer"}
+              {hasSavedCovers ? "Fermer" : "Passer"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2043,7 +2357,7 @@ export default function OrderPage() {
               variant="outline"
               onClick={() => {
                 setSupplementDialog(false)
-                setSupplementForm({ name: "", amount: "", notes: "", isComplimentary: false, complimentaryReason: "" })
+                setSupplementForm(getDefaultSupplementForm())
               }}
               className="bg-slate-700 border-slate-600"
             >

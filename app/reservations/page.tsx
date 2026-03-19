@@ -63,7 +63,7 @@ export default function ReservationsPage() {
     customer_phone: "",
     reservation_date: new Date().toISOString().split("T")[0],
     reservation_time: "19:00",
-    party_size: 2,
+    party_size: "2",
     duration_minutes: 120,
     notes: "",
     created_by: "",
@@ -87,11 +87,18 @@ export default function ReservationsPage() {
     customer_phone: string
     reservation_date: string
     reservation_time: string
-    party_size: number
+    party_size: string
     duration_minutes: number
     notes: string
   } | null>(null)
   const [editError, setEditError] = useState("")
+
+  const sanitizeIntegerInput = (value: string) => value.replace(/\D/g, "")
+
+  const parseIntegerInput = (value: string) => {
+    const parsed = Number.parseInt(value, 10)
+    return Number.isFinite(parsed) ? parsed : null
+  }
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -314,20 +321,23 @@ export default function ReservationsPage() {
 
   const handleAddReservation = async () => {
     setAddError("")
+    const parsedPartySize = parseIntegerInput(newReservation.party_size)
     const missing: string[] = []
     if (!newReservation.customer_name.trim()) missing.push("Nom du client")
     if (!newReservation.customer_phone.trim()) missing.push("Téléphone")
     if (!newReservation.table_id) missing.push("Table")
     if (!newReservation.reservation_date) missing.push("Date")
     if (!newReservation.reservation_time) missing.push("Heure")
-    if (!newReservation.party_size || newReservation.party_size < 1) missing.push("Nombre de personnes")
+    if (!parsedPartySize || parsedPartySize < 1) missing.push("Nombre de personnes")
     if (missing.length > 0) {
       setAddError(`Champs obligatoires manquants : ${missing.join(", ")}`)
       return
     }
+    if (!parsedPartySize || parsedPartySize < 1) return
     try {
       const payload = {
         ...newReservation,
+        party_size: parsedPartySize,
         created_by: user?.id || null,
         whatsapp_confirmation_requested: waConfirmEnabled,
         whatsapp_review_requested: waReviewEnabled,
@@ -352,7 +362,7 @@ export default function ReservationsPage() {
         customer_phone: "",
         reservation_date: new Date().toISOString().split("T")[0],
         reservation_time: "19:00",
-        party_size: 2,
+        party_size: "2",
         duration_minutes: 120,
         notes: "",
         created_by: "",
@@ -410,7 +420,7 @@ export default function ReservationsPage() {
       customer_phone: reservation.customer_phone || "",
       reservation_date: reservation.reservation_date,
       reservation_time: (reservation.reservation_time || "").slice(0, 5),
-      party_size: reservation.party_size,
+      party_size: String(reservation.party_size),
       duration_minutes: reservation.duration_minutes || 120,
       notes: reservation.notes || "",
     })
@@ -421,23 +431,28 @@ export default function ReservationsPage() {
   const handleEditReservation = async () => {
     if (!editingReservation) return
     setEditError("")
+    const parsedPartySize = parseIntegerInput(editingReservation.party_size)
     const missing: string[] = []
     if (!editingReservation.customer_name.trim()) missing.push("Nom du client")
     if (!editingReservation.customer_phone.trim()) missing.push("Téléphone")
     if (!editingReservation.table_id) missing.push("Table")
     if (!editingReservation.reservation_date) missing.push("Date")
     if (!editingReservation.reservation_time) missing.push("Heure")
-    if (!editingReservation.party_size || editingReservation.party_size < 1) missing.push("Nombre de personnes")
+    if (!parsedPartySize || parsedPartySize < 1) missing.push("Nombre de personnes")
     if (missing.length > 0) {
       setEditError(`Champs obligatoires manquants : ${missing.join(", ")}`)
       return
     }
+    if (!parsedPartySize || parsedPartySize < 1) return
     try {
       const { id, ...body } = editingReservation
       const response = await fetch(`/api/reservations/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          ...body,
+          party_size: parsedPartySize,
+        }),
       })
 
       if (!response.ok) {
@@ -721,13 +736,15 @@ export default function ReservationsPage() {
                   <div>
                     <Label className="text-sm">Nombre de personnes <span className="text-red-400">*</span></Label>
                     <Input
-                      type="number"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={newReservation.party_size}
                       onChange={(e) =>
-                        setNewReservation({ ...newReservation, party_size: Number.parseInt(e.target.value) })
+                        setNewReservation({ ...newReservation, party_size: sanitizeIntegerInput(e.target.value) })
                       }
                       className="bg-slate-700 border-slate-600 text-sm"
-                      min="1"
+                      placeholder="2"
                     />
                   </div>
                   <div>
@@ -1253,16 +1270,18 @@ export default function ReservationsPage() {
                 <div>
                   <Label className="text-sm">Nombre de personnes <span className="text-red-400">*</span></Label>
                   <Input
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={editingReservation.party_size}
                     onChange={(e) =>
                       setEditingReservation({
                         ...editingReservation,
-                        party_size: Number.parseInt(e.target.value),
+                        party_size: sanitizeIntegerInput(e.target.value),
                       })
                     }
                     className="bg-slate-700 border-slate-600 text-sm"
-                    min="1"
+                    placeholder="2"
                   />
                 </div>
                 <div>

@@ -214,10 +214,11 @@ export async function POST(request: NextRequest) {
             notes: params.notes,
             phase: params.phase,
           }
-          if (menuItem.type === "food") {
-            kitchenItems.push(ticketItem)
-          } else {
+          const isBarItem = menuItem.routing === "bar" || menuItem.type === "drink"
+          if (isBarItem) {
             barItems.push(ticketItem)
+          } else {
+            kitchenItems.push(ticketItem)
           }
         }
       }

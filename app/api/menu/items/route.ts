@@ -30,7 +30,11 @@ export async function GET() {
       category: item.menu_categories?.name || null
     }))
 
-    return NextResponse.json(transformedData)
+    return NextResponse.json(transformedData, {
+      headers: {
+        "Cache-Control": "no-store, max-age=0",
+      },
+    })
   } catch (error) {
     console.error("[v0] Error in menu items API:", error)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

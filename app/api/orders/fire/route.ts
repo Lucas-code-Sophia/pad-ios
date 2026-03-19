@@ -48,10 +48,11 @@ export async function POST(request: NextRequest) {
             quantity: item.quantity,
             notes: item.notes,
           }
-          if (menuItem.type === "food") {
-            kitchenItems.push(ticketItem)
-          } else {
+          const isBarItem = menuItem.routing === "bar" || menuItem.type === "drink"
+          if (isBarItem) {
             barItems.push(ticketItem)
+          } else {
+            kitchenItems.push(ticketItem)
           }
         }
       })

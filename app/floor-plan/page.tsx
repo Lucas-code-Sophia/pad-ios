@@ -1173,7 +1173,7 @@ export default function FloorPlanPage() {
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
           <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-pink-500"></div>
-          <span className="text-xs sm:text-sm text-slate-700">Occupée (à suivre)</span>
+          <span className="text-xs sm:text-sm text-slate-700">Reste à suivre</span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
           <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-yellow-600"></div>

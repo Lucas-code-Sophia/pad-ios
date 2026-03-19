@@ -33,7 +33,7 @@ export default function BillPage() {
   const [supplements, setSupplements] = useState<Supplement[]>([])
   const [loading, setLoading] = useState(true)
   const [splitMode, setSplitMode] = useState<"full" | "equal" | "items">("full")
-  const [splitCount, setSplitCount] = useState(2)
+  const [splitCount, setSplitCount] = useState("2")
   const [selectedItemQuantities, setSelectedItemQuantities] = useState<Map<string, number>>(new Map())
   const [paymentDialog, setPaymentDialog] = useState(false)
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card">("cash")
@@ -63,7 +63,7 @@ export default function BillPage() {
   const [complimentaryReason, setComplimentaryReason] = useState("")
   const [billPreviewDialogOpen, setBillPreviewDialogOpen] = useState(false)
   const [mealTicketDialogOpen, setMealTicketDialogOpen] = useState(false)
-  const [mealTicketMealsCount, setMealTicketMealsCount] = useState(3)
+  const [mealTicketMealsCount, setMealTicketMealsCount] = useState("3")
   const [mealTicketTotal, setMealTicketTotal] = useState("")
   const [mealTicketIncludeTax, setMealTicketIncludeTax] = useState(true)
   const [mealTicketTaxRate, setMealTicketTaxRate] = useState<10 | 20>(10)
@@ -71,6 +71,17 @@ export default function BillPage() {
   const [sendingBillEmail, setSendingBillEmail] = useState(false)
   const [sendingMealEmail, setSendingMealEmail] = useState(false)
   const canAccessBill = user?.role === "manager" || Boolean(user?.can_access_bill)
+
+  const sanitizeIntegerInput = (value: string) => value.replace(/\D/g, "")
+
+  const parseBoundedIntegerInput = (value: string, min: number, max: number, fallback: number) => {
+    const parsed = Number.parseInt(value, 10)
+    if (!Number.isFinite(parsed)) return fallback
+    return Math.min(max, Math.max(min, parsed))
+  }
+
+  const splitCountValue = parseBoundedIntegerInput(splitCount, 2, 20, 2)
+  const mealTicketMealsCountValue = parseBoundedIntegerInput(mealTicketMealsCount, 1, 30, 1)
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -97,7 +108,7 @@ export default function BillPage() {
         try {
           const parsed = JSON.parse(savedState)
           setSplitMode(parsed.splitMode || "full")
-          setSplitCount(parsed.splitCount || 2)
+          setSplitCount(String(parseBoundedIntegerInput(String(parsed.splitCount ?? ""), 2, 20, 2)))
           setSelectedItemQuantities(new Map(Object.entries(parsed.selectedItemQuantities || {})))
           setCustomAmount(parsed.customAmount || "")
           setShowCustomAmount(parsed.showCustomAmount || false)
@@ -112,7 +123,7 @@ export default function BillPage() {
     if (tableId && !loading) {
       const state = {
         splitMode,
-        splitCount,
+        splitCount: splitCountValue,
         selectedItemQuantities: Object.fromEntries(selectedItemQuantities),
         customAmount,
         showCustomAmount,
@@ -145,7 +156,7 @@ export default function BillPage() {
           setOrder(orderData.order)
 
           const [menuRes, paymentsRes, supplementsRes] = await Promise.all([
-            fetch("/api/menu/items"),
+            fetch("/api/menu/items", { cache: "no-store" }),
             fetch(`/api/payments?orderId=${orderData.order.id}`),
             fetch(`/api/supplements?orderId=${orderData.order.id}`),
           ])
@@ -217,7 +228,7 @@ export default function BillPage() {
     let amount = 0
 
     if (splitMode === "equal") {
-      amount = remaining / splitCount
+      amount = remaining / splitCountValue
     } else if (splitMode === "items") {
       amount = items.reduce((sum, item) => {
         const selectedQty = selectedItemQuantities.get(item.id) || 0
@@ -558,7 +569,7 @@ export default function BillPage() {
     const rate = Number(mealTicketTaxRate)
     const taxAmount = mealTicketIncludeTax && rate > 0 ? total - total / (1 + rate / 100) : 0
     const subtotal = mealTicketIncludeTax ? Math.max(0, total - taxAmount) : total
-    const mealsCount = Math.max(1, mealTicketMealsCount || 1)
+    const mealsCount = mealTicketMealsCountValue
 
     const body = `
       ${getTicketHeaderHtml("TICKET REPAS")}
@@ -656,7 +667,7 @@ export default function BillPage() {
     const rate = Number(mealTicketTaxRate)
     const taxAmount = mealTicketIncludeTax && rate > 0 ? total - total / (1 + rate / 100) : 0
     const subtotal = mealTicketIncludeTax ? Math.max(0, total - taxAmount) : total
-    const mealsCount = Math.max(1, mealTicketMealsCount || 1)
+    const mealsCount = mealTicketMealsCountValue
     const lines: string[] = []
 
     lines.push("RESTAURANT SOPHIA")
@@ -687,7 +698,7 @@ export default function BillPage() {
 
   const openMealTicketPreview = () => {
     const defaultMealsCount = table?.current_covers && table.current_covers > 0 ? table.current_covers : 3
-    setMealTicketMealsCount(defaultMealsCount)
+    setMealTicketMealsCount(String(defaultMealsCount))
     setMealTicketTotal(calculateRemainingAmount().toFixed(2))
     setMealTicketIncludeTax(true)
     setMealTicketTaxRate(10)
@@ -1146,12 +1157,14 @@ export default function BillPage() {
                   </Label>
                   <Input
                     id="splitCount"
-                    type="number"
-                    min="2"
-                    max="20"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={splitCount}
-                    onChange={(e) => setSplitCount(Number.parseInt(e.target.value) || 2)}
+                    onChange={(e) => setSplitCount(sanitizeIntegerInput(e.target.value))}
+                    onBlur={() => setSplitCount(String(splitCountValue))}
                     className="bg-slate-900 border-slate-700 text-white"
+                    placeholder="2"
                   />
                 </div>
               )}
@@ -1203,7 +1216,7 @@ export default function BillPage() {
                 <p className="text-3xl sm:text-4xl font-bold text-blue-400">{splitAmount.toFixed(2)} €</p>
                 {splitMode === "equal" && !showCustomAmount && (
                   <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                    ({remainingAmount.toFixed(2)} € ÷ {splitCount})
+                    ({remainingAmount.toFixed(2)} € ÷ {splitCountValue})
                   </p>
                 )}
                 {showCustomAmount && customAmount && (
@@ -1302,12 +1315,14 @@ export default function BillPage() {
               <div>
                 <Label className="text-sm">Nombre de repas</Label>
                 <Input
-                  type="number"
-                  min="1"
-                  max="30"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
                   value={mealTicketMealsCount}
-                  onChange={(e) => setMealTicketMealsCount(Math.max(1, Number.parseInt(e.target.value) || 1))}
+                  onChange={(e) => setMealTicketMealsCount(sanitizeIntegerInput(e.target.value))}
+                  onBlur={() => setMealTicketMealsCount(String(mealTicketMealsCountValue))}
                   className="bg-slate-900 border-slate-700 mt-1"
+                  placeholder="3"
                 />
               </div>
 
