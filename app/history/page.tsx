@@ -198,6 +198,24 @@ export default function HistoryPage() {
     }, 150)
   }
 
+  const formatTicketAmount = (value: number) =>
+    Number(value || 0).toLocaleString("fr-FR", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+
+  const formatTicketDateTime = (value: string | Date) => {
+    const date = value instanceof Date ? value : new Date(value)
+    if (Number.isNaN(date.getTime())) return new Date().toLocaleString("fr-FR")
+    return date.toLocaleString("fr-FR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    })
+  }
+
   const buildTicketHtml = (title: string, body: string) => `
     <html>
       <head>
@@ -205,22 +223,79 @@ export default function HistoryPage() {
         <title>${escapeHtml(title)}</title>
         <style>
           * { box-sizing: border-box; }
-          body { font-family: monospace; margin: 0; background: #fff; }
-          #ticket-root { padding: 12px; width: 320px; margin: 0 auto; color: #000; background: #fff; display: block; }
-          .center { text-align: center; }
-          .divider { border-top: 1px dashed #000; margin: 8px 0; }
-          .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
-          .item-name { max-width: 70%; word-break: break-word; }
-          .note { font-size: 10px; color: #333; font-style: italic; margin-left: 8px; }
-          .section-title { font-size: 10px; font-weight: bold; margin: 8px 0 2px; text-transform: uppercase; }
-          .complimentary { color: #666; text-decoration: line-through; }
-          .total { border-top: 1px solid #000; margin-top: 8px; padding-top: 6px; font-size: 13px; font-weight: bold; display: flex; justify-content: space-between; }
-          .kv { display: flex; justify-content: space-between; font-size: 11px; margin: 2px 0; gap: 8px; }
-          .footer { text-align: center; margin-top: 12px; font-size: 10px; }
-          .meta { display:flex; justify-content:space-between; font-size:10px; gap:8px; }
+          html, body { margin: 0; padding: 0; background: #fff; }
+          body {
+            font-family: "Helvetica Neue", Arial, sans-serif;
+            color: #2f2f2f;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          #ticket-root {
+            width: 78mm;
+            margin: 0 auto;
+            padding: 6mm 4.5mm 7mm;
+            font-size: 16px;
+            line-height: 1.18;
+          }
+          .head-center { text-align: center; }
+          .head-title { font-size: 42px; font-weight: 500; line-height: 1; }
+          .head-line { font-size: 42px; font-weight: 500; line-height: 1; text-transform: uppercase; }
+          .specimen { font-size: 44px; font-weight: 700; margin-top: 2mm; }
+          .meta-date { margin-top: 7mm; font-size: 48px; font-weight: 700; line-height: 1.05; }
+          .meta-service { font-size: 50px; font-weight: 700; line-height: 1.05; margin-top: 1.2mm; }
+          .meta-table { font-size: 40px; font-weight: 600; line-height: 1.1; margin-top: 0.8mm; }
+          .price-label { font-size: 46px; margin-top: 2mm; margin-bottom: 3mm; }
+          .item-row {
+            display: grid;
+            grid-template-columns: 1fr auto auto;
+            column-gap: 4mm;
+            align-items: baseline;
+            margin: 0.8mm 0;
+            font-size: 49px;
+          }
+          .item-name { min-width: 0; word-break: break-word; }
+          .item-flag { min-width: 20mm; text-align: center; font-size: 46px; font-weight: 500; color: #3f3f3f; }
+          .item-price { min-width: 18mm; text-align: right; font-variant-numeric: tabular-nums; }
+          .item-note { margin: 0.4mm 0 0.8mm 2mm; font-size: 40px; color: #444; }
+          .summary-note { margin-top: 4.5mm; margin-bottom: 1.4mm; font-size: 44px; }
+          .sum-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 50px;
+            margin: 0.8mm 0;
+            gap: 6mm;
+          }
+          .sum-row .sum-right { font-variant-numeric: tabular-nums; }
+          .sum-row.muted { font-size: 46px; color: #3b3b3b; }
+          .sum-row.due { font-size: 62px; font-weight: 700; margin-top: 1.8mm; }
+          .dash { margin: 3.4mm auto; text-align: center; font-size: 40px; color: #5a5a5a; }
+          .tax-head,
+          .tax-row {
+            display: grid;
+            grid-template-columns: 1.1fr 1fr 1fr 1fr;
+            column-gap: 2.5mm;
+            align-items: baseline;
+            font-variant-numeric: tabular-nums;
+          }
+          .tax-head { font-size: 48px; margin-bottom: 0.7mm; }
+          .tax-row { font-size: 46px; margin: 0.6mm 0; }
+          .tax-head span:not(:first-child),
+          .tax-row span:not(:first-child) { text-align: right; }
+          .payment-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            font-size: 50px;
+            margin: 0.8mm 0;
+            font-variant-numeric: tabular-nums;
+            gap: 6mm;
+          }
+          .ticket-ref { margin-top: 2.6mm; font-size: 34px; color: #4f4f4f; }
+          .printed-at { text-align: right; margin-top: 2.2mm; font-size: 34px; color: #4f4f4f; }
+          .final-dash { margin-top: 5mm; text-align: center; font-size: 40px; color: #5a5a5a; }
           @media print {
-            html, body { margin: 0; padding: 0; }
-            #ticket-root { padding: 6px; width: auto; display: block; }
+            #ticket-root { width: auto; padding: 4mm 2.5mm 5mm; }
           }
         </style>
       </head>
@@ -228,21 +303,78 @@ export default function HistoryPage() {
     </html>
   `
 
-  const getTicketHeaderHtml = () => {
+  const getTicketContext = () => {
     const sale = transactionDetail?.sale || selectedTransaction
-    return `
-      <div class="center" style="font-weight:bold;font-size:16px;">RESTAURANT SOPHIA</div>
-      <div class="center" style="font-size:10px;">67 Boulevard de la plage</div>
-      <div class="center" style="font-size:10px;">33970, Cap-Ferret</div>
-      <div class="center" style="font-size:10px;">SIRET : 940 771 488 00027</div>
-      <div class="divider"></div>
-      <div class="meta">
-        <div style="font-weight:bold;font-size:12px;">Table ${escapeHtml(sale?.table_number || "-")}</div>
-        <div>Serveur : ${escapeHtml(sale?.server_name || "-")}</div>
-      </div>
-      <div style="font-size:10px;color:#333;">${escapeHtml(sale?.created_at ? new Date(sale.created_at).toLocaleString("fr-FR") : new Date().toLocaleString("fr-FR"))}</div>
-      <div style="font-size:10px;color:#666;">Réimpression: ${escapeHtml(new Date().toLocaleString("fr-FR"))}</div>
-    `
+    const tableNumber = sale?.table_number || "-"
+    const serverName = (sale?.server_name || "-").trim() || "-"
+    const nowLabel = formatTicketDateTime(new Date())
+    const saleDate = formatTicketDateTime(sale?.created_at || new Date())
+    const serviceLine = `Sur place - ${Math.max(1, mealTicketMealsCount)} Couvert${mealTicketMealsCount > 1 ? "s" : ""} - ${serverName}`
+    return { tableNumber, serverName, nowLabel, saleDate, serviceLine }
+  }
+
+  const getTicketHeaderHtml = () => `
+    <div class="head-center head-title">Sophia</div>
+    <div class="head-center head-line">67 BOULEVARD DE LA PLAGE</div>
+    <div class="head-center head-line">33970 LEGE-CAP-FERRET</div>
+    <div class="head-center head-line">+33615578419</div>
+    <div class="head-center head-line">SARL LILY</div>
+    <div class="head-center head-line">SIRET : 94077148800027</div>
+    <div class="head-center specimen">*** SPECIMEN ***</div>
+  `
+
+  const getToFollowLabel = (status?: string) => {
+    if (status === "to_follow_1") return "À SUIVRE 1"
+    if (status === "to_follow_2") return "À SUIVRE 2"
+    return ""
+  }
+
+  const buildItemRowsHtml = (
+    rows: Array<{ label: string; amount: number; complimentary?: boolean; note?: string; followLabel?: string }>,
+  ) =>
+    rows
+      .map(
+        (row) => {
+          const rowFlag = [row.followLabel || "", row.complimentary ? "OFFERT" : ""].filter(Boolean).join(" • ")
+          return `
+          <div class="item-row">
+            <span class="item-name">${escapeHtml(row.label)}</span>
+            <span class="item-flag">${escapeHtml(rowFlag)}</span>
+            <span class="item-price">${formatTicketAmount(row.amount)}</span>
+          </div>
+          ${row.note ? `<div class="item-note">+ ${escapeHtml(row.note)}</div>` : ""}
+        `
+        },
+      )
+      .join("")
+
+  const buildTaxRowsHtml = (rows: Array<{ rate: number; ht: number; tva: number; ttc: number }>) =>
+    rows
+      .map(
+        (row) => `
+          <div class="tax-row">
+            <span>${formatTicketAmount(row.rate)} %</span>
+            <span>${formatTicketAmount(row.ht)}</span>
+            <span>${formatTicketAmount(row.tva)}</span>
+            <span>${formatTicketAmount(row.ttc)}</span>
+          </div>
+        `,
+      )
+      .join("")
+
+  const buildPaymentRowsHtml = () => {
+    if (!transactionDetail) return ""
+    const rows: string[] = []
+    if (transactionDetail.paymentBreakdown.card > 0) {
+      rows.push(`<div class="payment-row"><span>CB</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.card)}</span></div>`)
+    }
+    if (transactionDetail.paymentBreakdown.cash > 0) {
+      rows.push(`<div class="payment-row"><span>Cash</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.cash)}</span></div>`)
+    }
+    if (transactionDetail.paymentBreakdown.other > 0) {
+      rows.push(`<div class="payment-row"><span>TR</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.other)}</span></div>`)
+    }
+    return rows.join("")
   }
 
   const getTransactionTaxBreakdown = () => {
@@ -283,96 +415,111 @@ export default function HistoryPage() {
 
   const buildHistoryBillTicketHtml = () => {
     if (!transactionDetail) return ""
+    const context = getTicketContext()
     const { total, subtotal, tax10, tax20 } = getTransactionTaxBreakdown()
+    const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
+    const remaining = Math.max(0, total - alreadyPaid)
+    const coversCount = Math.max(1, mealTicketMealsCount || 1)
+    const perPerson = remaining / coversCount
+    const discountsIncluded =
+      transactionDetail.items.reduce((sum, item) => {
+        if (!item.is_complimentary) return sum
+        return sum + Number(item.price || 0) * Number(item.quantity || 0)
+      }, 0) +
+      transactionDetail.supplements.reduce((sum, supplement) => {
+        if (!supplement.is_complimentary) return sum
+        return sum + Number(supplement.amount || 0)
+      }, 0)
 
-    const itemsHtml = transactionDetail.items
-      .map((item) => {
-        const lineTotal = item.is_complimentary ? 0 : Number(item.line_total || 0)
-        return `
-          <div>
-            <div class="row ${item.is_complimentary ? "complimentary" : ""}">
-              <span class="item-name">${item.quantity}x ${escapeHtml(item.menu_name)}${item.is_complimentary ? " (OFFERT)" : ""}</span>
-              <span>${formatCurrency(lineTotal)}</span>
-            </div>
-            ${item.notes ? `<div class="note">↳ ${escapeHtml(item.notes)}</div>` : ""}
-          </div>
-        `
-      })
-      .join("")
+    const rows = [
+      ...transactionDetail.items.map((item) => ({
+        label: `${item.quantity} ${item.menu_name}`,
+        amount: item.is_complimentary ? 0 : Number(item.line_total || 0),
+        complimentary: item.is_complimentary,
+        note: item.notes || undefined,
+        followLabel: getToFollowLabel(item.status),
+      })),
+      ...transactionDetail.supplements.map((supplement) => ({
+        label: `+ 1 ${supplement.name}`,
+        amount: supplement.is_complimentary ? 0 : Number(supplement.amount || 0),
+        complimentary: supplement.is_complimentary,
+        note: supplement.notes || undefined,
+      })),
+    ]
 
-    const supplementsHtml =
-      transactionDetail.supplements.length === 0
-        ? ""
-        : `
-          <div class="section-title">Suppléments</div>
-          ${transactionDetail.supplements
-            .map((supplement) => {
-              const lineTotal = supplement.is_complimentary ? 0 : Number(supplement.amount || 0)
-              return `
-                <div>
-                  <div class="row ${supplement.is_complimentary ? "complimentary" : ""}">
-                    <span class="item-name">${escapeHtml(supplement.name)}${supplement.is_complimentary ? " (OFFERT)" : ""}</span>
-                    <span>${formatCurrency(lineTotal)}</span>
-                  </div>
-                  ${supplement.notes ? `<div class="note">↳ ${escapeHtml(supplement.notes)}</div>` : ""}
-                </div>
-              `
-            })
-            .join("")}
-        `
+    const taxRows = [
+      { rate: 10, ht: subtotal, tva: tax10, ttc: subtotal + tax10 },
+      { rate: 20, ht: tax20 > 0 ? tax20 / 0.2 : 0, tva: tax20, ttc: tax20 > 0 ? tax20 / 0.2 + tax20 : 0 },
+    ]
+    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
     const body = `
       ${getTicketHeaderHtml()}
-      <div style="margin: 10px 0;">
-        ${itemsHtml}
-        ${supplementsHtml}
+      <div class="meta-date">${escapeHtml(context.saleDate)}</div>
+      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
+      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
+      <div class="price-label">Prix en €</div>
+      ${buildItemRowsHtml(rows)}
+      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
+      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
+      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(discountsIncluded)}</span></div>
+      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
+      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
+      <div class="dash">---------------------------------------------------</div>
+      <div class="tax-head">
+        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
       </div>
-      <div class="kv"><span>Sous total</span><span>${formatCurrency(subtotal)}</span></div>
-      <div class="kv"><span>TVA 10%</span><span>${formatCurrency(tax10)}</span></div>
-      <div class="kv"><span>TVA 20%</span><span>${formatCurrency(tax20)}</span></div>
-      <div class="total">
-        <span>TOTAL</span>
-        <span>${formatCurrency(total)}</span>
-      </div>
-      <div class="divider"></div>
-      <div class="footer">Réimpression ticket addition</div>
-      <div class="footer">Merci de votre visite chez SOPHIA</div>
+      ${buildTaxRowsHtml(taxRows)}
+      <div class="dash">---------------------------------------------------</div>
+      ${buildPaymentRowsHtml()}
+      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
+      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
+      <div class="final-dash">-------------------------------</div>
     `
 
     return buildTicketHtml(`Réimpression addition - Table ${transactionDetail.sale.table_number || "-"}`, body)
   }
 
   const buildHistoryMealTicketHtml = () => {
+    if (!transactionDetail) return ""
+    const context = getTicketContext()
     const total = Math.max(0, Number.parseFloat(mealTicketTotal) || 0)
     const rate = Number(mealTicketTaxRate)
     const taxAmount = mealTicketIncludeTax && rate > 0 ? total - total / (1 + rate / 100) : 0
     const subtotal = mealTicketIncludeTax ? Math.max(0, total - taxAmount) : total
     const mealsCount = Math.max(1, mealTicketMealsCount || 1)
+    const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
+    const remaining = Math.max(0, total - alreadyPaid)
+    const perPerson = remaining / mealsCount
+    const taxRows = [
+      { rate: 10, ht: rate === 10 ? subtotal : 0, tva: rate === 10 ? taxAmount : 0, ttc: rate === 10 ? total : 0 },
+      { rate: 20, ht: rate === 20 ? subtotal : 0, tva: rate === 20 ? taxAmount : 0, ttc: rate === 20 ? total : 0 },
+    ]
+    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const rows = [{ label: `${mealsCount} Ticket repas`, amount: total }]
 
     const body = `
       ${getTicketHeaderHtml()}
-      <div class="center" style="font-weight:bold;font-size:14px;margin-top:6px;">TICKET REPAS</div>
-      <div style="margin: 10px 0;">
-        <div class="row">
-          <span class="item-name">${mealsCount} repas</span>
-          <span>${formatCurrency(total)}</span>
-        </div>
-        <div class="note">Ticket simplifié sans détail des articles</div>
+      <div class="meta-date">${escapeHtml(context.saleDate)}</div>
+      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
+      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
+      <div class="price-label">Prix en €</div>
+      ${buildItemRowsHtml(rows)}
+      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
+      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
+      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(0)}</span></div>
+      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
+      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
+      <div class="dash">---------------------------------------------------</div>
+      <div class="tax-head">
+        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
       </div>
-      ${
-        mealTicketIncludeTax
-          ? `
-            <div class="kv"><span>Sous total HT</span><span>${formatCurrency(subtotal)}</span></div>
-            <div class="kv"><span>TVA ${rate}%</span><span>${formatCurrency(taxAmount)}</span></div>
-          `
-          : `<div class="kv"><span>TVA</span><span>Non affichée</span></div>`
-      }
-      <div class="total">
-        <span>TOTAL</span>
-        <span>${formatCurrency(total)}</span>
-      </div>
-      <div class="divider"></div>
-      <div class="footer">Réimpression ticket repas</div>
+      ${buildTaxRowsHtml(taxRows)}
+      <div class="dash">---------------------------------------------------</div>
+      ${buildPaymentRowsHtml()}
+      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
+      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
+      <div class="final-dash">-------------------------------</div>
     `
 
     return buildTicketHtml(`Réimpression ticket repas - Table ${transactionDetail?.sale.table_number || "-"}`, body)
