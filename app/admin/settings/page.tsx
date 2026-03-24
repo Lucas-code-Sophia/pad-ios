@@ -1,71 +1,22 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ArrowLeft, FileText } from "lucide-react"
+import { ArrowLeft, FileText, Printer } from "lucide-react"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
-import { Input } from "@/components/ui/input"
 
 export default function SettingsPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
-  const [ipBar, setIpBar] = useState("")
-  const [ipKitchen, setIpKitchen] = useState("")
-  const [ipCaisse, setIpCaisse] = useState("")
-  const [printing, setPrinting] = useState<"bar" | "kitchen" | "caisse" | null>(null)
-  const [printResult, setPrintResult] = useState("")
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
       router.push("/floor-plan")
     }
   }, [user, isLoading, router])
-
-  useEffect(() => {
-    const b = typeof window !== "undefined" ? window.localStorage.getItem("printer_ip_bar") || "" : ""
-    const k = typeof window !== "undefined" ? window.localStorage.getItem("printer_ip_kitchen") || "" : ""
-    const c = typeof window !== "undefined" ? window.localStorage.getItem("printer_ip_caisse") || "" : ""
-    setIpBar(b)
-    setIpKitchen(k)
-    setIpCaisse(c)
-  }, [])
-
-  const saveIps = (bar?: string, kitchen?: string, caisse?: string) => {
-    if (typeof window === "undefined") return
-    if (bar !== undefined) window.localStorage.setItem("printer_ip_bar", bar)
-    if (kitchen !== undefined) window.localStorage.setItem("printer_ip_kitchen", kitchen)
-    if (caisse !== undefined) window.localStorage.setItem("printer_ip_caisse", caisse)
-  }
-
-  const testPrint = async (target: "bar" | "kitchen" | "caisse") => {
-    setPrintResult("")
-    setPrinting(target)
-    try {
-      const ip = target === "bar" ? ipBar : target === "caisse" ? ipCaisse : ipKitchen
-      if (!ip) {
-        setPrintResult("IP manquante")
-        return
-      }
-      const res = await fetch("/api/print", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, ip }),
-      })
-      const json = await res.json()
-      if (!res.ok || json.ok === false) {
-        setPrintResult(typeof json.response === "string" ? json.response : json.error || "Échec")
-      } else {
-        setPrintResult("OK")
-      }
-    } catch (e: any) {
-      setPrintResult(e?.message || "Erreur")
-    } finally {
-      setPrinting(null)
-    }
-  }
 
   if (isLoading) {
     return (
@@ -99,81 +50,20 @@ export default function SettingsPage() {
         <Card className="bg-slate-800 border-slate-700 mb-6">
           <CardHeader>
             <div className="flex items-center gap-3">
-              <FileText className="h-6 w-6 text-blue-400" />
+              <Printer className="h-6 w-6 text-blue-400" />
               <div>
                 <CardTitle className="text-white">Imprimantes Epson</CardTitle>
-                <CardDescription className="text-slate-400">Configuration et test d'impression</CardDescription>
+                <CardDescription className="text-slate-400">Configuration centralisée</CardDescription>
               </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <div className="text-slate-300 text-sm mb-2">IP Bar</div>
-                <Input
-                  placeholder="192.168.x.x"
-                  value={ipBar}
-                  onChange={(e) => {
-                    setIpBar(e.target.value)
-                  }}
-                  onBlur={() => saveIps(ipBar, undefined)}
-                  className="bg-slate-900 border-slate-700 text-white"
-                />
-              </div>
-              <div>
-                <div className="text-slate-300 text-sm mb-2">IP Cuisine</div>
-                <Input
-                  placeholder="192.168.x.x"
-                  value={ipKitchen}
-                  onChange={(e) => {
-                    setIpKitchen(e.target.value)
-                  }}
-                  onBlur={() => saveIps(undefined, ipKitchen)}
-                  className="bg-slate-900 border-slate-700 text-white"
-                />
-              </div>
-              <div>
-                <div className="text-slate-300 text-sm mb-2">IP Caisse</div>
-                <Input
-                  placeholder="192.168.x.x"
-                  value={ipCaisse}
-                  onChange={(e) => {
-                    setIpCaisse(e.target.value)
-                  }}
-                  onBlur={() => saveIps(undefined, undefined, ipCaisse)}
-                  className="bg-slate-900 border-slate-700 text-white"
-                />
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => testPrint("bar")}
-                className="bg-blue-600 hover:bg-blue-700 text-white"
-                disabled={printing !== null}
-                size="sm"
-              >
-                {printing === "bar" ? "Test Bar…" : "Test Bar"}
-              </Button>
-              <Button
-                onClick={() => testPrint("kitchen")}
-                className="bg-green-600 hover:bg-green-700 text-white"
-                disabled={printing !== null}
-                size="sm"
-              >
-                {printing === "kitchen" ? "Test Cuisine…" : "Test Cuisine"}
-              </Button>
-              <Button
-                onClick={() => testPrint("caisse")}
-                className="bg-yellow-600 hover:bg-yellow-700 text-white"
-                disabled={printing !== null}
-                size="sm"
-              >
-                {printing === "caisse" ? "Test Caisse…" : "Test Caisse"}
-              </Button>
-              {printResult && (
-                <div className="text-sm text-slate-300 ml-2 self-center">{printResult}</div>
-              )}
-            </div>
+            <p className="text-slate-300 text-sm mb-4">
+              Les IP et le mode d'impression sont gérés dans un seul onglet admin pour toute l'equipe.
+            </p>
+            <Button onClick={() => router.push("/admin/printing")} className="bg-blue-600 hover:bg-blue-700 text-white">
+              Ouvrir l'onglet Impression
+            </Button>
           </CardContent>
         </Card>
         <Card className="bg-slate-800 border-slate-700 mb-6">

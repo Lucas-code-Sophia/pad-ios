@@ -25,3 +25,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# dedicated iOS shell repository (managed separately)
+/sophiapad-ios-shell/

@@ -1,6 +1,13 @@
 "use client"
 
 import { buildEposXml, sampleTicket, sendToEpos, type EposTicket } from "@/lib/epos"
+import {
+  hasNativePrinterBridge,
+  isIosCapacitorRuntime,
+  nativePrintAirPrint,
+  nativePrintTicket,
+  type NativePrinterRole,
+} from "@/lib/capacitor-printer"
 
 export type PrintKind = "bar" | "kitchen" | "suites" | "caisse"
 export type PrintMode = "server" | "direct_epos" | "airprint"
@@ -23,6 +30,8 @@ const normalizePrintMode = (value: unknown): PrintMode => {
   if (value === "airprint") return "airprint"
   return "server"
 }
+
+const toNativeRole = (kind: PrintKind): NativePrinterRole => kind
 
 const escapeHtml = (value: string) =>
   value
@@ -128,9 +137,69 @@ const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<Prin
   return { ok: true, mode: "server" }
 }
 
-const runDirectEposPrint = async (ip: string, ticket: EposTicket): Promise<PrintResult> => {
+const runNativeAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
+  if (!hasNativePrinterBridge()) {
+    return { ok: false, mode: "airprint", message: "Plugin AirPrint iOS indisponible." }
+  }
+
+  const response = await nativePrintAirPrint({
+    html: buildAirPrintHtml(ticket),
+    jobName: kind ? `SophiaPad ${kind.toUpperCase()}` : "SophiaPad Ticket",
+  })
+
+  if (response.ok) return { ok: true, mode: "airprint" }
+  return { ok: false, mode: "airprint", message: response.message || "Échec AirPrint natif" }
+}
+
+const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
   if (!ip) {
     return { ok: false, mode: "direct_epos", message: "IP imprimante manquante" }
+  }
+
+  if (isIosCapacitorRuntime()) {
+    if (!hasNativePrinterBridge()) {
+      const fallbackNoBridge = await runAirPrint(ticket, kind)
+      if (fallbackNoBridge.ok) {
+        return {
+          ok: true,
+          mode: "airprint",
+          message: "Plugin Epson iOS indisponible, AirPrint lancé.",
+        }
+      }
+      return { ok: false, mode: "direct_epos", message: "Plugin iOS PrinterBridge indisponible." }
+    }
+
+    try {
+      const xml = buildEposXml(ticket)
+      const nativeResult = await nativePrintTicket({ ip, xml, role: toNativeRole(kind) })
+      if (nativeResult.ok) return { ok: true, mode: "direct_epos" }
+
+      const fallback = await runNativeAirPrint(ticket, kind)
+      if (fallback.ok) {
+        return {
+          ok: true,
+          mode: "airprint",
+          message: nativeResult.message
+            ? `Epson indisponible (${nativeResult.message}), fallback AirPrint lancé.`
+            : "Epson indisponible, fallback AirPrint lancé.",
+        }
+      }
+
+      const nativeMessage = nativeResult.message || "Échec impression Epson native"
+      const fallbackMessage = fallback.message ? ` Fallback AirPrint: ${fallback.message}` : ""
+      return { ok: false, mode: "direct_epos", message: `${nativeMessage}.${fallbackMessage}`.trim() }
+    } catch (error) {
+      const nativeMessage = error instanceof Error ? error.message : "Échec impression Epson native"
+      const fallback = await runNativeAirPrint(ticket, kind)
+      if (fallback.ok) {
+        return {
+          ok: true,
+          mode: "airprint",
+          message: `Epson indisponible (${nativeMessage}), fallback AirPrint lancé.`,
+        }
+      }
+      return { ok: false, mode: "direct_epos", message: `${nativeMessage}. Fallback AirPrint échoué.` }
+    }
   }
 
   try {
@@ -156,7 +225,11 @@ const runDirectEposPrint = async (ip: string, ticket: EposTicket): Promise<Print
   }
 }
 
-const runAirPrint = async (ticket: EposTicket): Promise<PrintResult> => {
+const runAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
+  if (isIosCapacitorRuntime() && hasNativePrinterBridge()) {
+    return runNativeAirPrint(ticket, kind)
+  }
+
   if (typeof window === "undefined") {
     return { ok: false, mode: "airprint", message: "AirPrint indisponible sur ce terminal" }
   }
@@ -197,11 +270,11 @@ export async function printTicketWithConfiguredMode(params: PrintTicketParams): 
   const resolvedIp = ipOverride || ipFromSettings
 
   if (mode === "airprint") {
-    return runAirPrint(ticket)
+    return runAirPrint(ticket, kind)
   }
 
   if (mode === "direct_epos") {
-    return runDirectEposPrint(resolvedIp, ticket)
+    return runDirectEposPrint(kind, resolvedIp, ticket)
   }
 
   return runServerPrint(kind, ticket)
