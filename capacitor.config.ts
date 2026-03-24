@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.sophiapad.app',
+  appId: 'com.lucascharles.sophiapad',
   appName: 'SophiaPad',
   webDir: 'www',
   server: {

@@ -18,7 +18,7 @@ npm run open:ios
 
 - `server.url`: `https://pad-jiavgvljh-charleslucas-projects.vercel.app/`
 - iOS deployment target: `15.0`
-- Bundle id: `com.sophiapad.app`
+- Bundle id: `com.lucascharles.sophiapad`
 - Permissions iOS:
   - `NSLocalNetworkUsageDescription`
   - `NSBonjourServices` (`_ipp._tcp`, `_ipps._tcp`, `_printer._tcp`, `_pdl-datastream._tcp`)
