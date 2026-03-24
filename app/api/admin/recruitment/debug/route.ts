@@ -1,14 +1,27 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 
-// Utiliser la clé service role pour bypasser RLS (temporaire pour debug)
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
-
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+    if (!supabaseUrl || !serviceRoleKey) {
+      return NextResponse.json(
+        {
+          error: "Missing Supabase environment variables",
+          missing: {
+            NEXT_PUBLIC_SUPABASE_URL: !supabaseUrl,
+            SUPABASE_SERVICE_ROLE_KEY: !serviceRoleKey,
+          },
+        },
+        { status: 500 }
+      )
+    }
+
+    // Utiliser la clé service role pour bypasser RLS (temporaire pour debug)
+    const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey)
+
     console.log("[DEBUG] Using service role key to bypass RLS")
     
     // Vérifier si la table existe
