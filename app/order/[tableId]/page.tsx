@@ -312,32 +312,44 @@ export default function OrderPage() {
     }
   }
 
-  const buildStationTicket = (station: DispatchStation, sentItems: CartItem[]): EposTicket | null => {
-    const stationItems = sentItems.filter((item) => {
+  const buildStationTicket = (
+    station: DispatchStation,
+    sentItems: CartItem[],
+    remainingItems: CartItem[] = [],
+  ): EposTicket | null => {
+    const isItemForStation = (item: CartItem) => {
       const isBar = item.menuItem?.routing === "bar" || item.menuItem?.type === "drink"
       return station === "bar" ? isBar : !isBar
-    })
+    }
 
-    if (stationItems.length === 0) return null
+    const sentStationItems = sentItems.filter(isItemForStation)
+    const remainingStationItems = remainingItems.filter(isItemForStation)
 
-    const directItems = stationItems.filter((item) => item.status !== "to_follow_1" && item.status !== "to_follow_2")
-    const follow1Items = stationItems.filter((item) => item.status === "to_follow_1")
-    const follow2Items = stationItems.filter((item) => item.status === "to_follow_2")
+    if (sentStationItems.length === 0 && remainingStationItems.length === 0) return null
+
+    const directItems = sentStationItems.filter((item) => item.status !== "to_follow_1" && item.status !== "to_follow_2")
+    const follow1CurrentItems = sentStationItems.filter((item) => item.status === "to_follow_1")
+    const follow2CurrentItems = sentStationItems.filter((item) => item.status === "to_follow_2")
+    const follow1FutureItems = remainingStationItems.filter((item) => item.status === "to_follow_1")
+    const follow2FutureItems = remainingStationItems.filter((item) => item.status === "to_follow_2")
+    const follow1Items = [...follow1CurrentItems, ...follow1FutureItems]
+    const follow2Items = [...follow2CurrentItems, ...follow2FutureItems]
     const line = "-------------------------------"
-    const highlightedTextScale = 1.5
+    const directTextScale = 1.5
+    const followTextScale = 1
     const lines: EposTicket["lines"] = []
 
-    lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, fontScale: highlightedTextScale })
+    lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, fontScale: directTextScale })
     if (user?.name) {
-      lines.push({ content: `Serveur: ${user.name}`, bold: true, fontScale: highlightedTextScale })
+      lines.push({ content: `Serveur: ${user.name}`, bold: true, fontScale: directTextScale })
     }
     lines.push({ content: `Heure: ${new Date().toLocaleTimeString("fr-FR")}` })
     lines.push({ content: line, align: "center" })
 
-    const pushItems = (items: CartItem[], strong: boolean) => {
+    const pushItems = (items: CartItem[], strong: boolean, fontScale: number) => {
       items.forEach((item) => {
         const itemLabel = item.menuItem?.name || item.menuItemId || "Article"
-        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong, fontScale: highlightedTextScale })
+        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong, fontScale })
         if (item.notes) {
           lines.push({ content: `  - ${item.notes}` })
         }
@@ -346,27 +358,27 @@ export default function OrderPage() {
 
     if (directItems.length > 0) {
       lines.push({ content: "DIRECT", bold: true })
-      pushItems(directItems, true)
+      pushItems(directItems, true, directTextScale)
     }
 
     if (directItems.length > 0 && (follow1Items.length > 0 || follow2Items.length > 0)) {
       lines.push({ content: line, align: "center" })
-      lines.push({ content: line, align: "center" })
     }
 
     if (follow1Items.length > 0) {
-      lines.push({ content: "A SUIVRE 1" })
-      pushItems(follow1Items, false)
+      const follow1Label = follow1FutureItems.length > 0 && follow1CurrentItems.length === 0 ? "A SUIVRE 1 (A VENIR)" : "A SUIVRE 1"
+      lines.push({ content: follow1Label })
+      pushItems(follow1Items, false, followTextScale)
     }
 
     if (follow1Items.length > 0 && follow2Items.length > 0) {
       lines.push({ content: line, align: "center" })
-      lines.push({ content: line, align: "center" })
     }
 
     if (follow2Items.length > 0) {
-      lines.push({ content: "A SUIVRE 2" })
-      pushItems(follow2Items, false)
+      const follow2Label = follow2FutureItems.length > 0 && follow2CurrentItems.length === 0 ? "A SUIVRE 2 (A VENIR)" : "A SUIVRE 2"
+      lines.push({ content: follow2Label })
+      pushItems(follow2Items, false, followTextScale)
     }
 
     return {
@@ -377,11 +389,14 @@ export default function OrderPage() {
     }
   }
 
-  const printDispatchedTickets = async (sentItems: CartItem[]): Promise<DispatchPrintSummary> => {
+  const printDispatchedTickets = async (
+    sentItems: CartItem[],
+    remainingItems: CartItem[] = [],
+  ): Promise<DispatchPrintSummary> => {
     const summary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
 
     for (const station of ["kitchen", "bar"] as DispatchStation[]) {
-      const ticket = buildStationTicket(station, sentItems)
+      const ticket = buildStationTicket(station, sentItems, remainingItems)
       if (!ticket) continue
 
       const result = await printTicketWithConfiguredMode({ kind: station, ticket })
@@ -1330,7 +1345,7 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        const printSummary = await printDispatchedTickets(itemsToSend)
+        const printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep)
 
         // On se resynchronise depuis la BDD (source de vérité)
         await fetchOrderData()
@@ -1450,7 +1465,7 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        const printSummary = await printDispatchedTickets(toFollowItems)
+        const printSummary = await printDispatchedTickets(toFollowItems, remainingItems)
 
         await fetchOrderData()
         if (sendPhase) {
