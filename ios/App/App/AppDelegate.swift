@@ -76,7 +76,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         }
 
         let timeoutMs = max(call.getInt("timeoutMs") ?? 7000, 1000)
-        guard let url = URL(string: "http://\(ip)/cgi-bin/epos/service.cgi") else {
+        guard let url = URL(string: "http://\(ip)/cgi-bin/epos/service.cgi?devid=local_printer&timeout=\(timeoutMs)") else {
             resolve(call, data: [
                 "ok": false,
                 "code": "invalid_args",
@@ -88,7 +88,8 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         var request = URLRequest(url: url, timeoutInterval: TimeInterval(timeoutMs) / 1000)
         request.httpMethod = "POST"
         request.setValue("text/xml; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.httpBody = xml.data(using: .utf8)
+        request.setValue("\"\"", forHTTPHeaderField: "SOAPAction")
+        request.httpBody = buildSoapEnvelope(from: xml).data(using: .utf8)
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self else { return }
@@ -112,6 +113,19 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             }
 
             let body = String(data: data ?? Data(), encoding: .utf8) ?? ""
+            let parsed = self.parseEposResponse(body)
+
+            if (200...299).contains(httpResponse.statusCode), parsed.success == false {
+                self.resolve(call, data: [
+                    "ok": false,
+                    "code": parsed.code ?? "epos_error",
+                    "message": self.messageForEposCode(parsed.code, status: parsed.status),
+                    "status": httpResponse.statusCode,
+                    "body": body
+                ])
+                return
+            }
+
             if (200...299).contains(httpResponse.statusCode) {
                 self.resolve(call, data: [
                     "ok": true,
@@ -229,6 +243,65 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
                     "message": "Impression annulee."
                 ])
             }
+        }
+    }
+
+    private func buildSoapEnvelope(from xml: String) -> String {
+        let cleanedXml = xml.replacingOccurrences(
+            of: "^\\s*<\\?xml[^>]*\\?>\\s*",
+            with: "",
+            options: .regularExpression
+        )
+
+        return """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+          <soapenv:Body>
+            \(cleanedXml)
+          </soapenv:Body>
+        </soapenv:Envelope>
+        """
+    }
+
+    private func parseEposResponse(_ body: String) -> (success: Bool?, code: String?, status: String?) {
+        let successRaw = firstRegexMatch(in: body, pattern: "success=\\\"(true|false)\\\"", options: [.caseInsensitive])
+        let success = successRaw.map { $0.lowercased() == "true" }
+        let code = firstRegexMatch(in: body, pattern: "code=\\\"([^\\\"]+)\\\"", options: [])
+        let status = firstRegexMatch(in: body, pattern: "status=\\\"([^\\\"]+)\\\"", options: [])
+        return (success: success, code: code, status: status)
+    }
+
+    private func firstRegexMatch(in text: String, pattern: String, options: NSRegularExpression.Options) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range), match.numberOfRanges > 1 else {
+            return nil
+        }
+        guard let captureRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return String(text[captureRange])
+    }
+
+    private func messageForEposCode(_ code: String?, status: String?) -> String {
+        let normalizedCode = (code ?? "epos_error").lowercased()
+        let statusSuffix = status != nil ? " (status \(status!))" : ""
+
+        switch normalizedCode {
+        case "schemaerror":
+            return "Format XML Epson invalide.\(statusSuffix)"
+        case "paperend":
+            return "Imprimante sans papier.\(statusSuffix)"
+        case "coveropen":
+            return "Capot imprimante ouvert.\(statusSuffix)"
+        case "autocuttererror":
+            return "Erreur autocutter imprimante.\(statusSuffix)"
+        case "mechanicalerror":
+            return "Erreur mecanique imprimante.\(statusSuffix)"
+        default:
+            return "Impression Epson echouee (\(code ?? "epos_error")).\(statusSuffix)"
         }
     }
 

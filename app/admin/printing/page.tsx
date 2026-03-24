@@ -143,6 +143,27 @@ export default function PrintingSettingsPage() {
     }
   }
 
+  const assignDiscoveredPrinter = (kind: "kitchen" | "bar" | "caisse", ip: string) => {
+    if (kind === "kitchen") {
+      setKitchenIp(ip)
+      setScanMessage(`IP Cuisine assignee: ${ip}. Clique Enregistrer pour sauvegarder.`)
+      return
+    }
+    if (kind === "bar") {
+      setBarIp(ip)
+      setScanMessage(`IP Bar assignee: ${ip}. Clique Enregistrer pour sauvegarder.`)
+      return
+    }
+    setCaisseIp(ip)
+    setScanMessage(`IP Caisse assignee: ${ip}. Clique Enregistrer pour sauvegarder.`)
+  }
+
+  const isAssigned = (kind: "kitchen" | "bar" | "caisse", ip: string) => {
+    if (kind === "kitchen") return kitchenIp === ip
+    if (kind === "bar") return barIp === ip
+    return caisseIp === ip
+  }
+
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900">
@@ -236,13 +257,31 @@ export default function PrintingSettingsPage() {
                             {printer.service || "service inconnu"}{printer.port > 0 ? `:${printer.port}` : ""}
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            <Button size="sm" variant="outline" onClick={() => setKitchenIp(printer.ip)}>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isAssigned("kitchen", printer.ip) ? "default" : "outline"}
+                              onClick={() => assignDiscoveredPrinter("kitchen", printer.ip)}
+                              className={isAssigned("kitchen", printer.ip) ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}
+                            >
                               Cuisine
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => setBarIp(printer.ip)}>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isAssigned("bar", printer.ip) ? "default" : "outline"}
+                              onClick={() => assignDiscoveredPrinter("bar", printer.ip)}
+                              className={isAssigned("bar", printer.ip) ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}
+                            >
                               Bar
                             </Button>
-                            <Button size="sm" variant="outline" onClick={() => setCaisseIp(printer.ip)}>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isAssigned("caisse", printer.ip) ? "default" : "outline"}
+                              onClick={() => assignDiscoveredPrinter("caisse", printer.ip)}
+                              className={isAssigned("caisse", printer.ip) ? "bg-blue-600 hover:bg-blue-700 text-white" : ""}
+                            >
                               Caisse
                             </Button>
                           </div>

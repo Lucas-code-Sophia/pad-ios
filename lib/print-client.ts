@@ -151,6 +151,20 @@ const runNativeAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<
   return { ok: false, mode: "airprint", message: response.message || "Échec AirPrint natif" }
 }
 
+const readNativeEposErrorFromBody = (body?: string): { code?: string; message?: string } | null => {
+  if (!body) return null
+  const successMatch = body.match(/success="(true|false)"/i)
+  if (!successMatch || successMatch[1].toLowerCase() !== "false") return null
+
+  const codeMatch = body.match(/code="([^"]+)"/i)
+  const statusMatch = body.match(/status="([^"]+)"/i)
+  const code = codeMatch?.[1]
+  const status = statusMatch?.[1]
+  const base = code ? `Epson error ${code}` : "Epson error"
+  const message = status ? `${base} (status ${status})` : base
+  return { code, message }
+}
+
 const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
   if (!ip) {
     return { ok: false, mode: "direct_epos", message: "IP imprimante manquante" }
@@ -171,7 +185,16 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
 
     try {
       const xml = buildEposXml(ticket)
-      const nativeResult = await nativePrintTicket({ ip, xml, role: toNativeRole(kind) })
+      const rawNativeResult = await nativePrintTicket({ ip, xml, role: toNativeRole(kind) })
+      const nativeBodyError = readNativeEposErrorFromBody(rawNativeResult.body)
+      const nativeResult = nativeBodyError
+        ? {
+            ...rawNativeResult,
+            ok: false,
+            code: rawNativeResult.code || nativeBodyError.code || "epos_error",
+            message: rawNativeResult.message || nativeBodyError.message,
+          }
+        : rawNativeResult
       if (nativeResult.ok) return { ok: true, mode: "direct_epos" }
 
       const fallback = await runNativeAirPrint(ticket, kind)
