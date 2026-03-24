@@ -324,11 +324,12 @@ export default function OrderPage() {
     const follow1Items = stationItems.filter((item) => item.status === "to_follow_1")
     const follow2Items = stationItems.filter((item) => item.status === "to_follow_2")
     const line = "-------------------------------"
+    const highlightedTextScale = 1.5
     const lines: EposTicket["lines"] = []
 
-    lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, width: 2, height: 2 })
+    lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, fontScale: highlightedTextScale })
     if (user?.name) {
-      lines.push({ content: `Serveur: ${user.name}`, bold: true })
+      lines.push({ content: `Serveur: ${user.name}`, bold: true, fontScale: highlightedTextScale })
     }
     lines.push({ content: `Heure: ${new Date().toLocaleTimeString("fr-FR")}` })
     lines.push({ content: line, align: "center" })
@@ -336,7 +337,7 @@ export default function OrderPage() {
     const pushItems = (items: CartItem[], strong: boolean) => {
       items.forEach((item) => {
         const itemLabel = item.menuItem?.name || item.menuItemId || "Article"
-        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong })
+        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong, fontScale: highlightedTextScale })
         if (item.notes) {
           lines.push({ content: `  - ${item.notes}` })
         }

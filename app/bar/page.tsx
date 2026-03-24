@@ -53,19 +53,20 @@ export default function BarPage() {
       const follow1Items = ticket.items.filter((item) => item.phase === "to_follow_1")
       const follow2Items = ticket.items.filter((item) => item.phase === "to_follow_2")
       const line = "-------------------------------"
+      const highlightedTextScale = 1.5
 
       const lines: EposTicket["lines"] = []
 
-      lines.push({ content: `Table ${ticket.table_number}`, bold: true, width: 2, height: 2 })
+      lines.push({ content: `Table ${ticket.table_number}`, bold: true, fontScale: highlightedTextScale })
       if (ticket.server_name) {
-        lines.push({ content: `Serveur: ${ticket.server_name}`, bold: true, width: 2, height: 2 })
+        lines.push({ content: `Serveur: ${ticket.server_name}`, bold: true, fontScale: highlightedTextScale })
       }
       lines.push({ content: `Heure: ${new Date(ticket.created_at).toLocaleTimeString("fr-FR")}` })
       lines.push({ content: line, align: "center" })
 
       const pushItems = (items: typeof ticket.items, strong: boolean) => {
         items.forEach((item) => {
-          lines.push({ content: `${item.quantity}x ${item.name}`, bold: strong })
+          lines.push({ content: `${item.quantity}x ${item.name}`, bold: strong, fontScale: highlightedTextScale })
           if (item.notes) {
             lines.push({ content: `  - ${item.notes}` })
           }

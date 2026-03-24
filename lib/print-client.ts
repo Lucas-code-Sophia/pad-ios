@@ -41,12 +41,29 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;")
 
+const AIRPRINT_BASE_FONT_SIZE = 13
+
+const resolveAirPrintLineScale = (line: EposTicket["lines"][number]): number => {
+  if (typeof line.fontScale === "number" && Number.isFinite(line.fontScale) && line.fontScale > 0) {
+    return line.fontScale
+  }
+
+  const widthScale = typeof line.width === "number" && Number.isFinite(line.width) ? line.width : 1
+  const heightScale = typeof line.height === "number" && Number.isFinite(line.height) ? line.height : 1
+  return Math.max(1, widthScale, heightScale)
+}
+
 const buildAirPrintHtml = (ticket: EposTicket) => {
   const linesHtml = ticket.lines
     .map((line) => {
       const alignClass = line.align === "center" ? "center" : line.align === "right" ? "right" : "left"
       const weightClass = line.bold ? "bold" : ""
-      return `<div class="line ${alignClass} ${weightClass}">${escapeHtml(line.content)}</div>`
+      const scale = resolveAirPrintLineScale(line)
+      const sizeStyle =
+        scale !== 1
+          ? ` style="font-size:${(AIRPRINT_BASE_FONT_SIZE * scale).toFixed(2)}px;line-height:1.35;"`
+          : ""
+      return `<div class="line ${alignClass} ${weightClass}"${sizeStyle}>${escapeHtml(line.content)}</div>`
     })
     .join("")
 
@@ -70,7 +87,7 @@ const buildAirPrintHtml = (ticket: EposTicket) => {
       .ticket {
         width: 72mm;
         margin: 0 auto;
-        font-size: 13px;
+        font-size: ${AIRPRINT_BASE_FONT_SIZE}px;
         line-height: 1.4;
         white-space: pre-wrap;
       }

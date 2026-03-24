@@ -5,6 +5,8 @@ export type EposTextLine = {
   underline?: boolean
   width?: number
   height?: number
+  font?: "font_a" | "font_b"
+  fontScale?: number
 }
 
 export type EposTicket = {
@@ -33,6 +35,50 @@ const parseEposResponse = (body: string) => {
   }
 }
 
+type EposStyleState = {
+  align: "left" | "center" | "right"
+  font: "font_a" | "font_b"
+  width: number
+  height: number
+}
+
+const clampTextSize = (value: number | undefined): number | undefined => {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return Math.min(8, Math.max(1, Math.round(value)))
+}
+
+const resolveLineSizing = (line: EposTextLine): Pick<EposStyleState, "font" | "width" | "height"> => {
+  const width = clampTextSize(line.width)
+  const height = clampTextSize(line.height)
+  if (width || height) {
+    return {
+      font: line.font ?? "font_a",
+      width: width ?? 1,
+      height: height ?? 1,
+    }
+  }
+
+  const scale = typeof line.fontScale === "number" && Number.isFinite(line.fontScale) ? line.fontScale : 1
+  if (scale >= 1.75) {
+    return { font: line.font ?? "font_a", width: 2, height: 2 }
+  }
+  if (scale >= 1.25) {
+    // Epson fonts only support integer scaling; this combo approximates x1.5.
+    return { font: "font_b", width: 2, height: 2 }
+  }
+
+  return { font: line.font ?? "font_a", width: 1, height: 1 }
+}
+
+const styleChanged = (current: EposStyleState, next: EposStyleState): boolean =>
+  current.align !== next.align ||
+  current.font !== next.font ||
+  current.width !== next.width ||
+  current.height !== next.height
+
+const buildStyleCommand = (style: EposStyleState): string =>
+  `<text align="${style.align}" font="${style.font}" width="${style.width}" height="${style.height}" />`
+
 // Build conservative ePOS-Print XML payload (avoid unsupported attrs that trigger SchemaError).
 export function buildEposXml(ticket: EposTicket): string {
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -40,21 +86,29 @@ export function buildEposXml(ticket: EposTicket): string {
   const footer = `</epos-print>`
 
   const parts: string[] = []
-  let currentAlign: "left" | "center" | "right" = "left"
+  let currentStyle: EposStyleState = { align: "left", font: "font_a", width: 1, height: 1 }
+
+  const applyStyle = (nextStyle: EposStyleState) => {
+    if (!styleChanged(currentStyle, nextStyle)) return
+    parts.push(buildStyleCommand(nextStyle))
+    currentStyle = nextStyle
+  }
 
   if (ticket.title) {
-    currentAlign = "center"
-    parts.push(`<text align="center" />`)
+    applyStyle({ align: "center", font: "font_a", width: 1, height: 1 })
     parts.push(`<text>${esc(ticket.title)}</text>`)
     parts.push(`<feed line="1" />`)
   }
 
   for (const line of ticket.lines) {
     const align = line.align ?? "left"
-    if (align !== currentAlign) {
-      parts.push(`<text align="${align}" />`)
-      currentAlign = align
-    }
+    const sizing = resolveLineSizing(line)
+    applyStyle({
+      align,
+      font: sizing.font,
+      width: sizing.width,
+      height: sizing.height,
+    })
     parts.push(`<text>${esc(line.content)}</text>`)
     parts.push(`<feed line="1" />`)
   }
