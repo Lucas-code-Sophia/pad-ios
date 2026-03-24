@@ -1,6 +1,6 @@
 # SophiaPad iOS Shell (Capacitor)
 
-Shell iOS natif pour charger `https://sophia-pad.vercel.app` et exposer un bridge natif `PrinterBridge`:
+Shell iOS natif pour charger `https://pad-jiavgvljh-charleslucas-projects.vercel.app/` et exposer un bridge natif `PrinterBridge`:
 - `discoverPrinters(timeoutMs)`
 - `printTicket({ ip, xml, role })`
 - `getPrinterStatus({ ip })`
@@ -16,7 +16,7 @@ npm run open:ios
 
 ## Configuration incluse
 
-- `server.url`: `https://sophia-pad.vercel.app`
+- `server.url`: `https://pad-jiavgvljh-charleslucas-projects.vercel.app/`
 - iOS deployment target: `15.0`
 - Bundle id: `com.sophiapad.app`
 - Permissions iOS:

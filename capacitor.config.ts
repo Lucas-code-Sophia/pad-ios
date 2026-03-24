@@ -5,7 +5,7 @@ const config: CapacitorConfig = {
   appName: 'SophiaPad',
   webDir: 'www',
   server: {
-    url: 'https://sophia-pad.vercel.app',
+    url: 'https://pad-jiavgvljh-charleslucas-projects.vercel.app/',
     cleartext: false
   }
 };
