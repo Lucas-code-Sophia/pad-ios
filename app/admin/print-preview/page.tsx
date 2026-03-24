@@ -56,17 +56,18 @@ export default function PrintPreviewPage() {
   )
 
   const receiptTotals = useMemo(() => {
-    const subtotal = receiptItems.reduce((sum, item) => {
+    const ttc10 = receiptItems.reduce((sum, item) => {
       if (item.complimentary) return sum
       return sum + item.price * item.qty
     }, 0)
-    const tax10 = subtotal * 0.1
+    const ht10 = ttc10 / 1.1
+    const tax10 = ttc10 - ht10
     const tax20 = 0
     return {
-      subtotal,
+      subtotal: ht10,
       tax10,
       tax20,
-      total: subtotal + tax10 + tax20,
+      total: ttc10 + tax20,
     }
   }, [receiptItems])
 

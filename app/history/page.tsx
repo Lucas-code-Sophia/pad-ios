@@ -377,46 +377,44 @@ export default function HistoryPage() {
     return rows.join("")
   }
 
-  const getTransactionTaxBreakdown = () => {
-    if (!transactionDetail) return { total: 0, subtotal: 0, tax10: 0, tax20: 0 }
+  const getTransactionTaxRows = () => {
+    if (!transactionDetail) {
+      return [
+        { rate: 10, ht: 0, tva: 0, ttc: 0 },
+        { rate: 20, ht: 0, tva: 0, ttc: 0 },
+      ]
+    }
 
-    const total = Number(transactionDetail.sale.total_amount || 0)
-    const itemTax = transactionDetail.items.reduce(
-      (acc, item) => {
-        if (item.is_complimentary) return acc
-        const rate = Number(item.tax_rate || 0)
-        const lineTotal = Number(item.price || 0) * Number(item.quantity || 0)
-        const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
-        if (rate === 10) acc.tax10 += lineTax
-        else if (rate === 20) acc.tax20 += lineTax
-        return acc
-      },
-      { tax10: 0, tax20: 0 },
-    )
+    const totalsByRate: Record<10 | 20, number> = { 10: 0, 20: 0 }
 
-    const supplementTax = transactionDetail.supplements.reduce(
-      (acc, supplement) => {
-        if (supplement.is_complimentary) return acc
-        const rate = 10
-        const amount = Number(supplement.amount || 0)
-        const lineTax = amount - amount / (1 + rate / 100)
-        acc.tax10 += lineTax
-        return acc
-      },
-      { tax10: 0, tax20: 0 },
-    )
+    for (const item of transactionDetail.items) {
+      if (item.is_complimentary) continue
+      const rate = Number(item.tax_rate || 0)
+      if (rate !== 10 && rate !== 20) continue
+      const lineTtc = Number(item.price || 0) * Number(item.quantity || 0)
+      totalsByRate[rate] += lineTtc
+    }
 
-    const tax10 = itemTax.tax10 + supplementTax.tax10
-    const tax20 = itemTax.tax20 + supplementTax.tax20
-    const subtotal = Math.max(0, total - tax10 - tax20)
+    for (const supplement of transactionDetail.supplements) {
+      if (supplement.is_complimentary) continue
+      const rate = 10
+      const lineTtc = Number(supplement.amount || 0)
+      totalsByRate[rate] += lineTtc
+    }
 
-    return { total, subtotal, tax10, tax20 }
+    return ([10, 20] as const).map((rate) => {
+      const ttc = totalsByRate[rate]
+      const ht = rate > 0 ? ttc / (1 + rate / 100) : ttc
+      const tva = ttc - ht
+      return { rate, ht, tva, ttc }
+    })
   }
 
   const buildHistoryBillTicketHtml = () => {
     if (!transactionDetail) return ""
     const context = getTicketContext()
-    const { total, subtotal, tax10, tax20 } = getTransactionTaxBreakdown()
+    const total = Number(transactionDetail.sale.total_amount || 0)
+    const taxRows = getTransactionTaxRows()
     const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
     const remaining = Math.max(0, total - alreadyPaid)
     const coversCount = Math.max(1, mealTicketMealsCount || 1)
@@ -447,10 +445,6 @@ export default function HistoryPage() {
       })),
     ]
 
-    const taxRows = [
-      { rate: 10, ht: subtotal, tva: tax10, ttc: subtotal + tax10 },
-      { rate: 20, ht: tax20 > 0 ? tax20 / 0.2 : 0, tva: tax20, ttc: tax20 > 0 ? tax20 / 0.2 + tax20 : 0 },
-    ]
     const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
     const body = `
