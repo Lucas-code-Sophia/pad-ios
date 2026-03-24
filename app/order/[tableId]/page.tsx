@@ -17,6 +17,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useOfflineManager } from "@/lib/offline-manager"
 import { OfflineIndicator } from "@/components/offline-indicator"
 import { getMenuButtonColorClasses } from "@/lib/menu-colors"
+import { printTicketWithConfiguredMode } from "@/lib/print-client"
+import type { EposTicket } from "@/lib/epos"
 
 // Fonction pour générer un ID unique
 const generateUniqueId = (productName: string) => {
@@ -108,6 +110,13 @@ interface SendFeedback {
   title: string
   lines: string[]
   variant: SendFeedbackVariant
+}
+
+type DispatchStation = "kitchen" | "bar"
+
+type DispatchPrintSummary = {
+  printedStations: DispatchStation[]
+  failedStations: Array<{ station: DispatchStation; message: string }>
 }
 
 export default function OrderPage() {
@@ -301,6 +310,91 @@ export default function OrderPage() {
       lines,
       variant: "success",
     }
+  }
+
+  const buildStationTicket = (station: DispatchStation, sentItems: CartItem[]): EposTicket | null => {
+    const stationItems = sentItems.filter((item) => {
+      const isBar = item.menuItem?.routing === "bar" || item.menuItem?.type === "drink"
+      return station === "bar" ? isBar : !isBar
+    })
+
+    if (stationItems.length === 0) return null
+
+    const directItems = stationItems.filter((item) => item.status !== "to_follow_1" && item.status !== "to_follow_2")
+    const follow1Items = stationItems.filter((item) => item.status === "to_follow_1")
+    const follow2Items = stationItems.filter((item) => item.status === "to_follow_2")
+    const line = "-------------------------------"
+    const lines: EposTicket["lines"] = []
+
+    lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, width: 2, height: 2 })
+    if (user?.name) {
+      lines.push({ content: `Serveur: ${user.name}`, bold: true })
+    }
+    lines.push({ content: `Heure: ${new Date().toLocaleTimeString("fr-FR")}` })
+    lines.push({ content: line, align: "center" })
+
+    const pushItems = (items: CartItem[], strong: boolean) => {
+      items.forEach((item) => {
+        const itemLabel = item.menuItem?.name || item.menuItemId || "Article"
+        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong })
+        if (item.notes) {
+          lines.push({ content: `  - ${item.notes}` })
+        }
+      })
+    }
+
+    if (directItems.length > 0) {
+      lines.push({ content: "DIRECT", bold: true })
+      pushItems(directItems, true)
+    }
+
+    if (directItems.length > 0 && (follow1Items.length > 0 || follow2Items.length > 0)) {
+      lines.push({ content: line, align: "center" })
+      lines.push({ content: line, align: "center" })
+    }
+
+    if (follow1Items.length > 0) {
+      lines.push({ content: "A SUIVRE 1" })
+      pushItems(follow1Items, false)
+    }
+
+    if (follow1Items.length > 0 && follow2Items.length > 0) {
+      lines.push({ content: line, align: "center" })
+      lines.push({ content: line, align: "center" })
+    }
+
+    if (follow2Items.length > 0) {
+      lines.push({ content: "A SUIVRE 2" })
+      pushItems(follow2Items, false)
+    }
+
+    return {
+      title: station === "bar" ? "BAR" : "CUISINE",
+      lines,
+      cut: true,
+      beep: true,
+    }
+  }
+
+  const printDispatchedTickets = async (sentItems: CartItem[]): Promise<DispatchPrintSummary> => {
+    const summary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
+
+    for (const station of ["kitchen", "bar"] as DispatchStation[]) {
+      const ticket = buildStationTicket(station, sentItems)
+      if (!ticket) continue
+
+      const result = await printTicketWithConfiguredMode({ kind: station, ticket })
+      if (result.ok) {
+        summary.printedStations.push(station)
+      } else {
+        summary.failedStations.push({
+          station,
+          message: result.message || `Échec impression ${station}`,
+        })
+      }
+    }
+
+    return summary
   }
 
   useEffect(() => {
@@ -1235,6 +1329,8 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
+        const printSummary = await printDispatchedTickets(itemsToSend)
+
         // On se resynchronise depuis la BDD (source de vérité)
         await fetchOrderData()
 
@@ -1244,14 +1340,29 @@ export default function OrderPage() {
         }
 
         if (sendPhase) {
-          showSendFeedback(
-            buildDispatchFeedback({
-              phase: sendPhase,
-              sentItems: itemsToSend,
-              remainingItems: itemsToKeep,
-              supplementsSent: supplementsToSend.length,
-            }),
-          )
+          const feedback = buildDispatchFeedback({
+            phase: sendPhase,
+            sentItems: itemsToSend,
+            remainingItems: itemsToKeep,
+            supplementsSent: supplementsToSend.length,
+          })
+
+          if (printSummary.printedStations.length > 0) {
+            const label = printSummary.printedStations
+              .map((station) => (station === "bar" ? "Bar" : "Cuisine"))
+              .join(", ")
+            feedback.lines.push(`Ticket imprimé: ${label}`)
+          }
+
+          if (printSummary.failedStations.length > 0) {
+            feedback.variant = "warning"
+            printSummary.failedStations.forEach(({ station, message }) => {
+              const label = station === "bar" ? "Bar" : "Cuisine"
+              feedback.lines.push(`Impression ${label} échouée: ${message}`)
+            })
+          }
+
+          showSendFeedback(feedback)
         }
       } else {
         throw new Error("Failed to create order")
@@ -1338,15 +1449,32 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
+        const printSummary = await printDispatchedTickets(toFollowItems)
+
         await fetchOrderData()
         if (sendPhase) {
-          showSendFeedback(
-            buildDispatchFeedback({
-              phase: sendPhase,
-              sentItems: toFollowItems,
-              remainingItems,
-            }),
-          )
+          const feedback = buildDispatchFeedback({
+            phase: sendPhase,
+            sentItems: toFollowItems,
+            remainingItems,
+          })
+
+          if (printSummary.printedStations.length > 0) {
+            const label = printSummary.printedStations
+              .map((station) => (station === "bar" ? "Bar" : "Cuisine"))
+              .join(", ")
+            feedback.lines.push(`Ticket imprimé: ${label}`)
+          }
+
+          if (printSummary.failedStations.length > 0) {
+            feedback.variant = "warning"
+            printSummary.failedStations.forEach(({ station, message }) => {
+              const label = station === "bar" ? "Bar" : "Cuisine"
+              feedback.lines.push(`Impression ${label} échouée: ${message}`)
+            })
+          }
+
+          showSendFeedback(feedback)
         }
       } else {
         throw new Error("Failed to fire follow items")
