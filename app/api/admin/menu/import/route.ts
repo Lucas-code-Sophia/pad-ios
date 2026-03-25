@@ -74,6 +74,91 @@ const parseRouting = (rawValue: string): "kitchen" | "bar" | null => {
   return null
 }
 
+const countDelimiterOutsideQuotes = (value: string, delimiter: string) => {
+  let count = 0
+  let inQuotes = false
+
+  for (let i = 0; i < value.length; i++) {
+    const char = value[i]
+    if (char === '"') {
+      if (inQuotes && value[i + 1] === '"') {
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (!inQuotes && char === delimiter) {
+      count += 1
+    }
+  }
+
+  return count
+}
+
+const detectCsvDelimiter = (csvText: string) => {
+  const firstLine = csvText
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .find((line) => line.trim().length > 0) ?? ""
+
+  const semicolonCount = countDelimiterOutsideQuotes(firstLine, ";")
+  const commaCount = countDelimiterOutsideQuotes(firstLine, ",")
+  return semicolonCount >= commaCount ? ";" : ","
+}
+
+const parseCsvRows = (csvText: string): string[][] => {
+  const text = csvText.replace(/^\uFEFF/, "")
+  const delimiter = detectCsvDelimiter(text)
+  const rows: string[][] = []
+  let currentRow: string[] = []
+  let currentField = ""
+  let inQuotes = false
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+
+    if (char === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        currentField += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (!inQuotes && char === delimiter) {
+      currentRow.push(currentField)
+      currentField = ""
+      continue
+    }
+
+    if (!inQuotes && (char === "\n" || char === "\r")) {
+      if (char === "\r" && text[i + 1] === "\n") {
+        i += 1
+      }
+      currentRow.push(currentField)
+      if (currentRow.some((cell) => cell.trim() !== "")) {
+        rows.push(currentRow)
+      }
+      currentRow = []
+      currentField = ""
+      continue
+    }
+
+    currentField += char
+  }
+
+  currentRow.push(currentField)
+  if (currentRow.some((cell) => cell.trim() !== "")) {
+    rows.push(currentRow)
+  }
+
+  return rows
+}
+
 const normalizeRows = (rows: unknown[][]) => {
   const hasMultiColumnRows = rows.some((row) => Array.isArray(row) && row.length > 1)
   if (hasMultiColumnRows) return rows
@@ -97,21 +182,29 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 })
     }
 
-    const fileBuffer = await file.arrayBuffer()
-    const workbook = XLSX.read(fileBuffer, { type: "array" })
-    const firstSheetName = workbook.SheetNames[0]
+    const lowerFileName = file.name?.toLowerCase() || ""
+    const isCsvFile = lowerFileName.endsWith(".csv") || file.type.includes("csv")
+    let rows: unknown[][]
 
-    if (!firstSheetName) {
-      return NextResponse.json({ error: "No sheet found in file" }, { status: 400 })
+    if (isCsvFile) {
+      rows = parseCsvRows(await file.text())
+    } else {
+      const fileBuffer = await file.arrayBuffer()
+      const workbook = XLSX.read(fileBuffer, { type: "array" })
+      const firstSheetName = workbook.SheetNames[0]
+
+      if (!firstSheetName) {
+        return NextResponse.json({ error: "No sheet found in file" }, { status: 400 })
+      }
+
+      const firstSheet = workbook.Sheets[firstSheetName]
+      const rawRows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, {
+        header: 1,
+        blankrows: false,
+        defval: "",
+      })
+      rows = normalizeRows(rawRows as unknown[][])
     }
-
-    const firstSheet = workbook.Sheets[firstSheetName]
-    const rawRows = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, {
-      header: 1,
-      blankrows: false,
-      defval: "",
-    })
-    const rows = normalizeRows(rawRows as unknown[][])
 
     if (rows.length === 0) {
       return NextResponse.json({ success: true, imported: 0, skipped: 0 })

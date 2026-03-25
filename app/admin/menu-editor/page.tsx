@@ -597,14 +597,14 @@ export default function MenuEditorPage() {
       </div>
 
       <Dialog open={editDialog} onOpenChange={setEditDialog}>
-        <DialogContent className="bg-slate-800 text-white border-slate-700 max-w-[95vw] sm:max-w-md">
+        <DialogContent className="bg-slate-800 text-white border-slate-700 max-w-[95vw] sm:max-w-3xl max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-base sm:text-lg">
               {editingItem ? "Modifier l'article" : "Nouvel article"}
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 sm:space-y-4">
-            <div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+            <div className="md:col-span-2">
               <Label className="text-sm">Nom</Label>
               <Input
                 value={editingItem ? editingItem.name ?? "" : newItem.name}
@@ -616,7 +616,7 @@ export default function MenuEditorPage() {
                 className="bg-slate-700 border-slate-600 text-sm"
               />
             </div>
-            <div>
+            <div className="md:col-span-2">
               <Label className="text-sm">Détails affichés (optionnel)</Label>
               <Input
                 value={editingItem ? editingItem.details ?? "" : newItem.details}
@@ -629,7 +629,7 @@ export default function MenuEditorPage() {
                 className="bg-slate-700 border-slate-600 text-sm"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 md:col-span-2">
               <div>
                 <Label className="text-sm">Prix (€)</Label>
                 <Input
@@ -726,7 +726,7 @@ export default function MenuEditorPage() {
                 <option value="false">Non</option>
               </select>
             </div>
-            <div className="mt-4">
+            <div>
               <Label className="text-sm">État de stock</Label>
               <select
                 value={
@@ -776,7 +776,7 @@ export default function MenuEditorPage() {
 
             {/* Allergen assignment */}
             {allergens.length > 0 && (
-              <div>
+              <div className="md:col-span-2">
                 <Label className="text-sm">Allergènes</Label>
                 <div className="flex flex-wrap gap-1.5 mt-1.5 p-2 bg-slate-700/50 rounded-md max-h-32 overflow-y-auto">
                   {allergens.map((allergen) => {
@@ -800,7 +800,7 @@ export default function MenuEditorPage() {
               </div>
             )}
 
-            <Button onClick={handleSaveItem} className="w-full bg-blue-600 hover:bg-blue-700 text-sm">
+            <Button onClick={handleSaveItem} className="w-full md:col-span-2 bg-blue-600 hover:bg-blue-700 text-sm">
               {editingItem ? "Enregistrer" : "Créer"}
             </Button>
           </div>

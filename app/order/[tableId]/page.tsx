@@ -216,7 +216,10 @@ export default function OrderPage() {
   const menuEnfantOptions = ["Pâtes poulet", "Frites poulet"]
   const siropOptions = ["Menthe", "Citron", "Pêche", "Grenadine"]
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
-  const isBurgerItem = (name: string) => normalizeName(name).includes("burger")
+  const requiresCuissonSelection = (name: string) => {
+    const normalizedName = normalizeForSearch(name)
+    return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
+  }
   const isVinBouteilleItem = (item: MenuItem) => item.category === "Vins Bouteille"
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
@@ -919,7 +922,7 @@ export default function OrderPage() {
       openMenuEnfantDialog(item)
       return
     }
-    if (isBurgerItem(item.name)) {
+    if (requiresCuissonSelection(item.name)) {
       openCuissonDialog(item)
       return
     }
