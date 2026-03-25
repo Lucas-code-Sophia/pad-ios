@@ -42,6 +42,7 @@ export default function AdminPage() {
   const [showAddUser, setShowAddUser] = useState(false)
   const [newUser, setNewUser] = useState({ name: "", pin: "", role: "server" as "server" | "manager" })
   const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [exportingMenu, setExportingMenu] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editUserDialog, setEditUserDialog] = useState(false)
   const [showUsersDialog, setShowUsersDialog] = useState(false)
@@ -232,6 +233,34 @@ export default function AdminPage() {
     } catch (error) {
       console.error("[v0] Error importing menu:", error)
       alert("Erreur lors de l'import")
+    }
+  }
+
+  const handleExportMenu = async () => {
+    try {
+      setExportingMenu(true)
+      const response = await fetch("/api/admin/menu/export")
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}))
+        alert(error?.error || "Erreur lors de l'export du menu")
+        return
+      }
+
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `menu_export_${new Date().toISOString().split("T")[0]}.csv`
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+    } catch (error) {
+      console.error("[v0] Error exporting menu:", error)
+      alert("Erreur lors de l'export du menu")
+    } finally {
+      setExportingMenu(false)
     }
   }
 
@@ -522,6 +551,14 @@ export default function AdminPage() {
               size="sm"
             >
               Importer
+            </Button>
+            <Button
+              onClick={handleExportMenu}
+              disabled={exportingMenu}
+              className="w-full bg-cyan-600 hover:bg-cyan-700 text-white border border-cyan-500 disabled:opacity-50"
+              size="sm"
+            >
+              {exportingMenu ? "Export en cours..." : "Exporter le menu actuel (.csv)"}
             </Button>
           </CardContent>
         </Card>

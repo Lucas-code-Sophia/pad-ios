@@ -3,7 +3,17 @@ import { createClient } from "@/lib/supabase/server"
 import { normalizeMenuButtonColor } from "@/lib/menu-colors"
 import * as XLSX from "xlsx"
 
-type MenuImportColumn = "name" | "price" | "taxRate" | "category" | "routing" | "buttonColor" | "status" | "details"
+type MenuImportColumn =
+  | "name"
+  | "price"
+  | "taxRate"
+  | "category"
+  | "routing"
+  | "buttonColor"
+  | "status"
+  | "details"
+  | "outOfStock"
+  | "isSuggestion"
 
 const HEADER_ALIASES: Record<MenuImportColumn, string[]> = {
   name: ["name", "nom", "intitule", "intitulé", "article"],
@@ -14,6 +24,8 @@ const HEADER_ALIASES: Record<MenuImportColumn, string[]> = {
   buttonColor: ["buttoncolor", "button_color", "color", "couleur", "couleur_bouton"],
   status: ["status", "visible", "actif", "active"],
   details: ["details", "detail", "détails", "description", "caracteristiques", "caractéristiques"],
+  outOfStock: ["out_of_stock", "rupture", "en_rupture", "stock_out", "stockout"],
+  isSuggestion: ["is_piatto_del_giorno", "suggestion", "suggestion_chef", "chef_special", "special"],
 }
 
 const normalizeLabel = (value: unknown) =>
@@ -35,13 +47,18 @@ const readCell = (
   return String(value).trim()
 }
 
-const parseStatus = (rawStatus?: string) => {
-  if (!rawStatus) return true
-  const normalized = rawStatus.trim().toLowerCase()
+const parseBooleanField = (rawValue: string | undefined, defaultValue: boolean) => {
+  if (!rawValue) return defaultValue
+  const normalized = rawValue.trim().toLowerCase()
+  if (!normalized) return defaultValue
   if (["false", "0", "no", "non"].includes(normalized)) return false
   if (["true", "1", "yes", "oui"].includes(normalized)) return true
-  return true
+  return defaultValue
 }
+
+const parseStatus = (rawStatus?: string) => parseBooleanField(rawStatus, true)
+const parseOutOfStock = (rawOutOfStock?: string) => parseBooleanField(rawOutOfStock, false)
+const parseSuggestion = (rawSuggestion?: string) => parseBooleanField(rawSuggestion, false)
 
 const parsePrice = (rawValue: string) => {
   const parsed = Number.parseFloat(rawValue.replace(",", "."))
@@ -134,6 +151,8 @@ export async function POST(request: Request) {
       const buttonColor = readCell(row, mappedHeaders, "buttonColor", 5)
       const status = readCell(row, mappedHeaders, "status", 6)
       const details = readCell(row, mappedHeaders, "details", 7)
+      const outOfStock = readCell(row, mappedHeaders, "outOfStock", 8)
+      const isSuggestion = readCell(row, mappedHeaders, "isSuggestion", 9)
 
       const routing = parseRouting(routingRaw)
       const parsedPrice = parsePrice(price)
@@ -187,7 +206,11 @@ export async function POST(request: Request) {
           type: routing === "bar" ? "drink" : "food",
           routing,
           status: parseStatus(status),
+          out_of_stock: parseOutOfStock(outOfStock),
+          is_piatto_del_giorno: parseSuggestion(isSuggestion),
         }
+
+        newItem.out_of_stock_date = newItem.out_of_stock ? new Date().toISOString().split("T")[0] : null
 
         if (buttonColor !== undefined && buttonColor !== "") {
           newItem.button_color = normalizeMenuButtonColor(buttonColor)
