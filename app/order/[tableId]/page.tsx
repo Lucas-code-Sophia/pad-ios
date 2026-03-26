@@ -146,6 +146,8 @@ export default function OrderPage() {
   const [siropChoice, setSiropChoice] = useState("")
   const [cuissonDialogOpen, setCuissonDialogOpen] = useState(false)
   const [cuissonItem, setCuissonItem] = useState<MenuItem | null>(null)
+  const [jusFruitDialogOpen, setJusFruitDialogOpen] = useState(false)
+  const [jusFruitItem, setJusFruitItem] = useState<MenuItem | null>(null)
   const [supplementDialog, setSupplementDialog] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [transferTables, setTransferTables] = useState<Table[]>([])
@@ -216,10 +218,12 @@ export default function OrderPage() {
   const menuEnfantOptions = ["Pâtes poulet", "Frites poulet"]
   const siropOptions = ["Menthe", "Citron", "Pêche", "Grenadine"]
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
+  const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
   const requiresCuissonSelection = (name: string) => {
     const normalizedName = normalizeForSearch(name)
     return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
   }
+  const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isVinBouteilleItem = (item: MenuItem) => item.category === "Vins Bouteille"
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
@@ -852,6 +856,18 @@ export default function OrderPage() {
     setCuissonItem(null)
   }
 
+  const openJusFruitDialog = (item: MenuItem) => {
+    setJusFruitItem(item)
+    setJusFruitDialogOpen(true)
+  }
+
+  const handleJusFruitSelect = async (fruit: string) => {
+    if (!jusFruitItem) return
+    await addItemsToOrder([{ menuItem: jusFruitItem, notes: `Fruit: ${fruit}` }])
+    setJusFruitDialogOpen(false)
+    setJusFruitItem(null)
+  }
+
   // ── Couverts ──────────────────────────────────────────────────────────
   const getActiveCoversCount = () => {
     if (coversCount != null && coversCount > 0) return coversCount
@@ -924,6 +940,10 @@ export default function OrderPage() {
     }
     if (requiresCuissonSelection(item.name)) {
       openCuissonDialog(item)
+      return
+    }
+    if (isJusArtisanalBioItem(item.name)) {
+      openJusFruitDialog(item)
       return
     }
     if (isVinBouteilleItem(item) && !hasOrderedWineBottle) {
@@ -1542,6 +1562,20 @@ export default function OrderPage() {
     if (!hasSearchQuery) return true
     return normalizeForSearch(`${item.name} ${item.details || ""}`).includes(normalizedSearchQuery)
   })
+  const wineColorOrder: Record<string, number> = {
+    white: 0,
+    red: 1,
+    rose: 2,
+  }
+  const shouldSortByWineColor = selectedCategoryNameNormalized.includes("vin")
+  const displayedItems = shouldSortByWineColor
+    ? [...filteredItems].sort((a, b) => {
+        const rankA = wineColorOrder[(a.button_color || "").toLowerCase()] ?? 99
+        const rankB = wineColorOrder[(b.button_color || "").toLowerCase()] ?? 99
+        if (rankA !== rankB) return rankA - rankB
+        return a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
+      })
+    : filteredItems
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
@@ -1797,7 +1831,7 @@ export default function OrderPage() {
 
           {/* Menu Items Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-            {filteredItems.length === 0 && visibleCustomMenuPresets.length === 0 ? (
+            {displayedItems.length === 0 && visibleCustomMenuPresets.length === 0 ? (
               <Card className="col-span-2 sm:col-span-3 p-6 sm:p-8 bg-slate-800 border-slate-700 text-center">
                 <p className="text-slate-300 text-sm sm:text-base">Aucun élément trouvé</p>
                 {hasSearchQuery && (
@@ -1822,12 +1856,11 @@ export default function OrderPage() {
                   </Card>
                 ))}
 
-                {filteredItems.map((item) => {
+                {displayedItems.map((item) => {
               const cartItem = cart.find((c) => getCartItemMenuItemId(c) === item.id && c.status === "pending")
               const quantity = cartItem?.quantity || 0
               const isOutOfStock = item.out_of_stock
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
-              const isLightColor = !isOutOfStock && item.button_color === "white"
               const itemDetails = item.details?.trim()
 
               return (
@@ -1846,18 +1879,18 @@ export default function OrderPage() {
                     {item.is_piatto_del_giorno && (
                       <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-0.5">⭐ Suggestion</div>
                     )}
-                    <div className={`font-semibold text-sm sm:text-base mb-1 truncate ${isLightColor ? "text-slate-900" : "text-white"}`}>
+                    <div className="font-semibold text-sm sm:text-base mb-1 truncate text-white">
                       {item.name}
                     </div>
                     {itemDetails && (
                       <div
-                        className={`text-[10px] sm:text-xs leading-snug mb-1.5 ${isLightColor ? "text-slate-700" : "text-slate-300"}`}
+                        className="text-[10px] sm:text-xs leading-snug mb-1.5 text-slate-300"
                         title={itemDetails}
                       >
                         {itemDetails}
                       </div>
                     )}
-                    <div className={`text-xs sm:text-sm mb-2 ${isLightColor ? "text-slate-600" : "text-slate-400"}`}>
+                    <div className="text-xs sm:text-sm mb-2 text-slate-400">
                       {item.price.toFixed(2)} €
                     </div>
                     {isOutOfStock ? (
@@ -2343,6 +2376,35 @@ export default function OrderPage() {
             <Button
               variant="outline"
               onClick={() => { setCuissonDialogOpen(false); setCuissonItem(null) }}
+              className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+            >
+              Annuler
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Jus Artisanal Bio Dialog */}
+      <Dialog open={jusFruitDialogOpen} onOpenChange={setJusFruitDialogOpen}>
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🍹 Choix du fruit — {jusFruitItem?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 py-3">
+            {jusFruitOptions.map((fruit) => (
+              <Button
+                key={fruit}
+                onClick={() => handleJusFruitSelect(fruit)}
+                className="h-14 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-emerald-600 hover:border-emerald-500 transition-colors"
+              >
+                {fruit}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => { setJusFruitDialogOpen(false); setJusFruitItem(null) }}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
               Annuler
