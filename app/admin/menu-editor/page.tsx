@@ -46,6 +46,15 @@ export default function MenuEditorPage() {
     is_piatto_del_giorno: false,
   })
 
+  const normalizeEditorValue = (value?: string | null) =>
+    String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim()
+
+  const isRhumArrangeName = (value?: string | null) => normalizeEditorValue(value) === "rhum arrange"
+
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
       router.push("/floor-plan")
@@ -617,7 +626,11 @@ export default function MenuEditorPage() {
               />
             </div>
             <div className="md:col-span-2">
-              <Label className="text-sm">Détails affichés (optionnel)</Label>
+              <Label className="text-sm">
+                {isRhumArrangeName(editingItem ? editingItem.name : newItem.name)
+                  ? "Goûts (séparés par virgules)"
+                  : "Détails affichés (optionnel)"}
+              </Label>
               <Input
                 value={editingItem ? editingItem.details ?? "" : newItem.details}
                 onChange={(e) =>
@@ -625,9 +638,18 @@ export default function MenuEditorPage() {
                     ? setEditingItem({ ...editingItem, details: e.target.value })
                     : setNewItem({ ...newItem, details: e.target.value })
                 }
-                placeholder="Ex: Sec, rond et fruité"
+                placeholder={
+                  isRhumArrangeName(editingItem ? editingItem.name : newItem.name)
+                    ? "Ex: Ananas, Vanille, Mangue"
+                    : "Ex: Sec, rond et fruité"
+                }
                 className="bg-slate-700 border-slate-600 text-sm"
               />
+              {isRhumArrangeName(editingItem ? editingItem.name : newItem.name) && (
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Chaque goût ajouté ici apparaîtra en choix au clic sur la caisse.
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3 sm:gap-4 md:col-span-2">
               <div>

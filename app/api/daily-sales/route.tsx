@@ -1,10 +1,25 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
+import { RESTAURANT_OPENING_DATE, isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const date = searchParams.get("date") || new Date().toISOString().split("T")[0]
+
+    if (isBeforeRestaurantOpeningDate(date)) {
+      return NextResponse.json({
+        date,
+        sales: [],
+        statistics: {
+          totalRevenue: 0,
+          orderCount: 0,
+          averageTicket: 0,
+          totalTax: 0,
+        },
+        serverStats: [],
+      })
+    }
 
     const supabase = await createServerClient()
 
@@ -13,6 +28,7 @@ export async function GET(request: NextRequest) {
       .from("daily_sales")
       .select("*")
       .eq("date", date)
+      .gte("date", RESTAURANT_OPENING_DATE)
       .order("created_at", { ascending: false })
 
     if (error) {

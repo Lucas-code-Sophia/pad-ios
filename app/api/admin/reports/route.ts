@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import {
+  RESTAURANT_OPENING_DATE,
+  clampDateToRestaurantOpening,
+  isBeforeRestaurantOpeningDate,
+} from "@/lib/restaurant-opening"
 
 export async function GET(request: NextRequest) {
   try {
@@ -36,12 +41,51 @@ export async function GET(request: NextRequest) {
 
     const startDateStr = period === "today" ? new Date().toISOString().split("T")[0] : startDate.toISOString().split("T")[0]
     const endDateStr = period === "today" ? new Date().toISOString().split("T")[0] : endDate.toISOString().split("T")[0]
+    const effectiveStartDateStr = clampDateToRestaurantOpening(startDateStr)
+    const effectiveStartTimestamp = `${effectiveStartDateStr}T00:00:00.000Z`
+    const effectiveEndTimestamp = `${endDateStr}T23:59:59.999Z`
+
+    if (isBeforeRestaurantOpeningDate(endDateStr)) {
+      return NextResponse.json({
+        salesData: [],
+        hourlySales: [],
+        topDishes: [],
+        serverStats: [],
+        stats: {
+          totalSales: 0,
+          totalSalesHT: 0,
+          totalOrders: 0,
+          averageTicket: 0,
+          dailyAverage: 0,
+          activeDays: 0,
+          totalPeriodDays: 0,
+          totalTax: 0,
+          taxRate10Share: 0,
+          taxRate20Share: 0,
+          totalComplimentaryAmount: 0,
+          totalComplimentaryCount: 0,
+          totalCovers: 0,
+          averageCoversPerOrder: 0,
+          revenuePerCover: 0,
+          dailyAverageCovers: 0,
+          avgDurationMin: 0,
+          minDuration: 0,
+          maxDuration: 0,
+          tablesWithDuration: 0,
+          complimentaryPercentage: 0,
+          paymentMix: {
+            volume: { cash: 0, card: 0, other: 0 },
+            value: { cash: 0, card: 0, other: 0 },
+          },
+        },
+      })
+    }
 
     // Fetch daily sales data
     const { data: dailySales } = await supabase
       .from("daily_sales")
       .select("*")
-      .gte("date", startDateStr)
+      .gte("date", effectiveStartDateStr)
       .lte("date", endDateStr)
       .order("date", { ascending: true })
 
@@ -164,8 +208,8 @@ export async function GET(request: NextRequest) {
         price,
         created_at
       `)
-      .gte("created_at", startDate.toISOString())
-      .lte("created_at", endDate.toISOString())
+      .gte("created_at", effectiveStartTimestamp)
+      .lte("created_at", effectiveEndTimestamp)
 
     const { data: menuItems } = await supabase.from("menu_items").select("*")
 
@@ -252,8 +296,8 @@ export async function GET(request: NextRequest) {
     // ── Days open / closed calculation ──
     const activeDays = daysInPeriod.size
     // Calculate total calendar days in the period
-    const periodStartMs = period === "today" ? new Date(startDateStr).getTime() : startDate.getTime()
-    const periodEndMs = period === "today" ? new Date(endDateStr).getTime() : endDate.getTime()
+    const periodStartMs = new Date(effectiveStartDateStr).getTime()
+    const periodEndMs = new Date(endDateStr).getTime()
     const totalPeriodDays = Math.max(1, Math.round((periodEndMs - periodStartMs) / (1000 * 60 * 60 * 24)) + 1)
     const dailyAverage = activeDays > 0 ? totalSales / activeDays : 0
 

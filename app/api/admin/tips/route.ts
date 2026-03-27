@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import {
+  RESTAURANT_OPENING_TIMESTAMP,
+  clampDateToRestaurantOpening,
+  isBeforeRestaurantOpeningDate,
+} from "@/lib/restaurant-opening"
 
 interface Payment {
   tip_amount: number | null
@@ -70,7 +75,28 @@ export async function GET(request: Request) {
 
     const weekStartStr = weekStart.toISOString().split("T")[0]
     const weekEndStr = weekEnd.toISOString().split("T")[0]
+    const effectiveWeekStartStr = clampDateToRestaurantOpening(weekStartStr)
+    const effectiveWeekStartIso = `${effectiveWeekStartStr}T00:00:00.000Z`
+    const effectiveWeekEndIso = `${weekEndStr}T23:59:59.999Z`
     const weekNumber = getIsoWeekNumber(weekStart)
+
+    if (isBeforeRestaurantOpeningDate(weekEndStr)) {
+      return NextResponse.json({
+        weeklyTotal: 0,
+        averagePerTable: 0,
+        tablesServed: 0,
+        weeklyChange: 0,
+        totalTips: 0,
+        totalCash: 0,
+        totalCard: 0,
+        weekStart: weekStartStr,
+        weekEnd: weekEndStr,
+        weekNumber,
+        dailyBreakdown: [],
+        recentEntries: [],
+        settlement: null,
+      })
+    }
 
     // Récupérer les paiements avec des pourboires
     const { data: payments, error: paymentsError } = await supabase
@@ -90,8 +116,8 @@ export async function GET(request: Request) {
           name
         )
       `)
-      .gte("created_at", weekStart.toISOString())
-      .lte("created_at", weekEnd.toISOString())
+      .gte("created_at", effectiveWeekStartIso)
+      .lte("created_at", effectiveWeekEndIso)
       .not("tip_amount", "is", null)
       .gt("tip_amount", 0)
       .order("created_at", { ascending: true })
@@ -124,15 +150,19 @@ export async function GET(request: Request) {
       const lastWeekEnd = new Date(weekEnd)
       lastWeekEnd.setDate(lastWeekEnd.getDate() - 7)
 
-      const { data: lastWeekPayments } = await supabase
-        .from("payments")
-        .select("tip_amount")
-        .gte("created_at", lastWeekStart.toISOString())
-        .lte("created_at", lastWeekEnd.toISOString())
-        .not("tip_amount", "is", null)
-        .gt("tip_amount", 0)
+      const lastWeekEndStr = lastWeekEnd.toISOString().split("T")[0]
+      if (!isBeforeRestaurantOpeningDate(lastWeekEndStr)) {
+        const lastWeekStartStr = clampDateToRestaurantOpening(lastWeekStart.toISOString().split("T")[0])
+        const { data: lastWeekPayments } = await supabase
+          .from("payments")
+          .select("tip_amount")
+          .gte("created_at", `${lastWeekStartStr}T00:00:00.000Z`)
+          .lte("created_at", `${lastWeekEndStr}T23:59:59.999Z`)
+          .not("tip_amount", "is", null)
+          .gt("tip_amount", 0)
 
-      lastWeekTotal = lastWeekPayments?.reduce((sum: number, p: any) => sum + (p.tip_amount || 0), 0) || 0
+        lastWeekTotal = lastWeekPayments?.reduce((sum: number, p: any) => sum + (p.tip_amount || 0), 0) || 0
+      }
     }
 
     const weeklyChange = lastWeekTotal > 0 ? ((weeklyTotal - lastWeekTotal) / lastWeekTotal) * 100 : 0
@@ -174,6 +204,7 @@ export async function GET(request: Request) {
     const { data: allPayments } = await supabase
       .from("payments")
       .select("tip_amount")
+      .gte("created_at", RESTAURANT_OPENING_TIMESTAMP)
       .not("tip_amount", "is", null)
       .gt("tip_amount", 0)
 

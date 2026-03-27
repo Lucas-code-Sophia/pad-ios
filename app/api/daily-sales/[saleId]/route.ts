@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
+import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ saleId: string }> }) {
   try {
@@ -18,6 +19,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     }
 
     if (!sale) {
+      return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
+    }
+
+    if (sale.date && isBeforeRestaurantOpeningDate(String(sale.date))) {
       return NextResponse.json({ error: "Transaction not found" }, { status: 404 })
     }
 

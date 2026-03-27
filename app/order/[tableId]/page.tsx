@@ -148,6 +148,9 @@ export default function OrderPage() {
   const [cuissonItem, setCuissonItem] = useState<MenuItem | null>(null)
   const [jusFruitDialogOpen, setJusFruitDialogOpen] = useState(false)
   const [jusFruitItem, setJusFruitItem] = useState<MenuItem | null>(null)
+  const [rhumArrangeDialogOpen, setRhumArrangeDialogOpen] = useState(false)
+  const [rhumArrangeItem, setRhumArrangeItem] = useState<MenuItem | null>(null)
+  const [rhumArrangeOptions, setRhumArrangeOptions] = useState<string[]>([])
   const [supplementDialog, setSupplementDialog] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [transferTables, setTransferTables] = useState<Table[]>([])
@@ -219,11 +222,18 @@ export default function OrderPage() {
   const siropOptions = ["Menthe", "Citron", "Pêche", "Grenadine"]
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
   const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
+  const defaultRhumArrangeOptions = ["Ananas", "Vanille", "Mangue", "Passion", "Coco", "Gingembre"]
   const requiresCuissonSelection = (name: string) => {
     const normalizedName = normalizeForSearch(name)
     return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
   }
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
+  const isRhumArrangeItem = (name: string) => normalizeForSearch(name) === "rhum arrange"
+  const parseChoiceOptions = (value?: string | null) =>
+    String(value || "")
+      .split(/[,;\n]+/)
+      .map((option) => option.trim())
+      .filter((option) => option.length > 0)
   const isVinBouteilleItem = (item: MenuItem) => item.category === "Vins Bouteille"
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
@@ -868,6 +878,21 @@ export default function OrderPage() {
     setJusFruitItem(null)
   }
 
+  const openRhumArrangeDialog = (item: MenuItem) => {
+    const configuredOptions = parseChoiceOptions(item.details)
+    setRhumArrangeOptions(configuredOptions.length > 0 ? configuredOptions : defaultRhumArrangeOptions)
+    setRhumArrangeItem(item)
+    setRhumArrangeDialogOpen(true)
+  }
+
+  const handleRhumArrangeSelect = async (flavor: string) => {
+    if (!rhumArrangeItem) return
+    await addItemsToOrder([{ menuItem: rhumArrangeItem, notes: `Goût: ${flavor}` }])
+    setRhumArrangeDialogOpen(false)
+    setRhumArrangeItem(null)
+    setRhumArrangeOptions([])
+  }
+
   // ── Couverts ──────────────────────────────────────────────────────────
   const getActiveCoversCount = () => {
     if (coversCount != null && coversCount > 0) return coversCount
@@ -944,6 +969,10 @@ export default function OrderPage() {
     }
     if (isJusArtisanalBioItem(item.name)) {
       openJusFruitDialog(item)
+      return
+    }
+    if (isRhumArrangeItem(item.name)) {
+      openRhumArrangeDialog(item)
       return
     }
     if (isVinBouteilleItem(item) && !hasOrderedWineBottle) {
@@ -1861,7 +1890,7 @@ export default function OrderPage() {
               const quantity = cartItem?.quantity || 0
               const isOutOfStock = item.out_of_stock
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
-              const itemDetails = item.details?.trim()
+              const itemDetails = isRhumArrangeItem(item.name) ? "" : item.details?.trim()
 
               return (
                 <Card
@@ -2405,6 +2434,48 @@ export default function OrderPage() {
             <Button
               variant="outline"
               onClick={() => { setJusFruitDialogOpen(false); setJusFruitItem(null) }}
+              className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+            >
+              Annuler
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rhum Arrangé Dialog */}
+      <Dialog
+        open={rhumArrangeDialogOpen}
+        onOpenChange={(open) => {
+          setRhumArrangeDialogOpen(open)
+          if (!open) {
+            setRhumArrangeItem(null)
+            setRhumArrangeOptions([])
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🥃 Choix du goût — {rhumArrangeItem?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 py-3">
+            {rhumArrangeOptions.map((option) => (
+              <Button
+                key={option}
+                onClick={() => handleRhumArrangeSelect(option)}
+                className="h-14 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-amber-600 hover:border-amber-500 transition-colors"
+              >
+                {option}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setRhumArrangeDialogOpen(false)
+                setRhumArrangeItem(null)
+                setRhumArrangeOptions([])
+              }}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
               Annuler

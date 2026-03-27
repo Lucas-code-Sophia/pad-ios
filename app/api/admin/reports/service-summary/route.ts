@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,6 +9,16 @@ export async function GET(request: NextRequest) {
 
     if (!date) {
       return NextResponse.json({ error: "Date is required" }, { status: 400 })
+    }
+
+    if (isBeforeRestaurantOpeningDate(date)) {
+      return NextResponse.json({
+        date,
+        hasData: false,
+        services: { midi: null, soir: null },
+        servers: [],
+        insights: [],
+      })
     }
 
     const supabase = await createClient()
@@ -288,5 +299,4 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to fetch service summary" }, { status: 500 })
   }
 }
-
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
+import { RESTAURANT_OPENING_DATE, isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
 export async function GET() {
   try {
@@ -7,7 +8,22 @@ export async function GET() {
 
     const today = new Date().toISOString().split("T")[0]
 
-    const { data: dailySales, error: dailyError } = await supabase.from("daily_sales").select("*").eq("date", today)
+    if (isBeforeRestaurantOpeningDate(today)) {
+      return NextResponse.json({
+        date: today,
+        total_sales: 0,
+        total_sales_ht: 0,
+        total_tax: 0,
+        order_count: 0,
+        average_ticket: 0,
+      })
+    }
+
+    const { data: dailySales, error: dailyError } = await supabase
+      .from("daily_sales")
+      .select("*")
+      .eq("date", today)
+      .gte("date", RESTAURANT_OPENING_DATE)
     if (dailyError) throw dailyError
 
     const totalSales = dailySales?.reduce((sum, record) => sum + Number.parseFloat(record.total_amount), 0) || 0
