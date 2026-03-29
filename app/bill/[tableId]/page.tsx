@@ -45,6 +45,27 @@ type EmployeeDiscountPayload = {
   breakdown: EmployeeDiscountBreakdown[]
 }
 
+type PaymentSplitMode = "full" | "equal" | "items" | "custom"
+
+const normalizeSplitMode = (value: unknown, legacyShowCustomAmount?: boolean): PaymentSplitMode => {
+  if (value === "full" || value === "equal" || value === "items" || value === "custom") return value
+  if (legacyShowCustomAmount) return "custom"
+  return "full"
+}
+
+const normalizeBillText = (value?: string | null) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+
+const isEmployeeDiscountSupplement = (supplement: Supplement) => {
+  const normalizedName = normalizeBillText(supplement.name)
+  const normalizedNotes = normalizeBillText(supplement.notes || "")
+  return normalizedName.includes("remise salarie -50") || normalizedNotes.includes("remise -50%")
+}
+
 export default function BillPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
@@ -56,7 +77,7 @@ export default function BillPage() {
   const [items, setItems] = useState<OrderItemWithMenu[]>([])
   const [supplements, setSupplements] = useState<Supplement[]>([])
   const [loading, setLoading] = useState(true)
-  const [splitMode, setSplitMode] = useState<"full" | "equal" | "items">("full")
+  const [splitMode, setSplitMode] = useState<PaymentSplitMode>("full")
   const [splitCount, setSplitCount] = useState("2")
   const [selectedItemQuantities, setSelectedItemQuantities] = useState<Map<string, number>>(new Map())
   const [paymentDialog, setPaymentDialog] = useState(false)
@@ -70,7 +91,6 @@ export default function BillPage() {
   const [payments, setPayments] = useState<BillPaymentEntry[]>([])
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [customAmount, setCustomAmount] = useState("")
-  const [showCustomAmount, setShowCustomAmount] = useState(false)
   const [employeeDiscountActive, setEmployeeDiscountActive] = useState(false)
   const [offerDialog, setOfferDialog] = useState<{
     open: boolean
@@ -136,11 +156,10 @@ export default function BillPage() {
       if (savedState) {
         try {
           const parsed = JSON.parse(savedState)
-          setSplitMode(parsed.splitMode || "full")
+          setSplitMode(normalizeSplitMode(parsed.splitMode, Boolean(parsed.showCustomAmount)))
           setSplitCount(String(parseBoundedIntegerInput(String(parsed.splitCount ?? ""), 2, 20, 2)))
           setSelectedItemQuantities(new Map(Object.entries(parsed.selectedItemQuantities || {})))
           setCustomAmount(parsed.customAmount || "")
-          setShowCustomAmount(parsed.showCustomAmount || false)
           setEmployeeDiscountActive(Boolean(parsed.employeeDiscountActive))
         } catch (error) {
           console.error("[v0] Error loading payment state:", error)
@@ -156,19 +175,18 @@ export default function BillPage() {
         splitCount: splitCountValue,
         selectedItemQuantities: Object.fromEntries(selectedItemQuantities),
         customAmount,
-        showCustomAmount,
         employeeDiscountActive,
       }
       localStorage.setItem(PAYMENT_STATE_KEY + tableId, JSON.stringify(state))
     }
-  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, showCustomAmount, employeeDiscountActive, loading])
+  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, employeeDiscountActive, loading])
 
   useEffect(() => {
     const unsupportedMode = splitMode !== "full" && splitMode !== "items"
-    if (!canUseEmployeeDiscount || showCustomAmount || unsupportedMode) {
+    if (!canUseEmployeeDiscount || unsupportedMode) {
       setEmployeeDiscountActive(false)
     }
-  }, [canUseEmployeeDiscount, splitMode, showCustomAmount])
+  }, [canUseEmployeeDiscount, splitMode])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -266,14 +284,12 @@ export default function BillPage() {
   }
 
   const calculateBaseSplitAmount = () => {
-    if (showCustomAmount && customAmount && Number.parseFloat(customAmount) > 0) {
-      return roundCurrency(Number.parseFloat(customAmount))
-    }
-
     const remaining = calculateRemainingAmount()
     let amount = 0
 
-    if (splitMode === "equal") {
+    if (splitMode === "custom") {
+      amount = Number.parseFloat(customAmount) || 0
+    } else if (splitMode === "equal") {
       amount = remaining / splitCountValue
     } else if (splitMode === "items") {
       amount = items.reduce((sum, item) => {
@@ -289,7 +305,7 @@ export default function BillPage() {
   }
 
   const buildEmployeeDiscountPayload = (baseAmountInput: number): EmployeeDiscountPayload | null => {
-    if (!employeeDiscountActive || !canUseEmployeeDiscount || showCustomAmount) return null
+    if (!employeeDiscountActive || !canUseEmployeeDiscount) return null
     if (splitMode !== "full" && splitMode !== "items") return null
 
     const baseAmount = roundCurrency(baseAmountInput)
@@ -419,7 +435,7 @@ export default function BillPage() {
           splitMode,
           itemQuantities,
           discount,
-          customAmount: showCustomAmount ? customAmount : null,
+          customAmount: splitMode === "custom" ? customAmount : null,
           tipAmount: tipValue,
           recordedBy,
         }),
@@ -429,7 +445,6 @@ export default function BillPage() {
         const result = await response.json()
         setPaymentDialog(false)
         setCustomAmount("")
-        setShowCustomAmount(false)
         setEmployeeDiscountActive(false)
         setCashGiven("")
         setTipAmount("")
@@ -1292,8 +1307,9 @@ export default function BillPage() {
   const totalWithTip = splitAmount + tipValue
   const changeDue = paymentMethod === "cash" ? cashGivenValue - totalWithTip : 0
   const selectedItemsCount = Array.from(selectedItemQuantities.values()).reduce((sum, qty) => sum + qty, 0)
-  const isEmployeeDiscountEligible =
-    canUseEmployeeDiscount && !showCustomAmount && (splitMode === "full" || splitMode === "items")
+  const employeeDiscountSupplements = supplements.filter((supplement) => isEmployeeDiscountSupplement(supplement))
+  const visibleSupplements = supplements.filter((supplement) => !isEmployeeDiscountSupplement(supplement))
+  const isEmployeeDiscountEligible = canUseEmployeeDiscount && (splitMode === "full" || splitMode === "items")
   const disableEmployeeDiscountToggle =
     !isEmployeeDiscountEligible || (splitMode === "items" && selectedItemsCount === 0)
   const disablePaymentActions = (splitMode === "items" && selectedItemsCount === 0) || splitAmount <= 0
@@ -1398,19 +1414,35 @@ export default function BillPage() {
                 const selectedQty = selectedItemQuantities.get(item.id) || 0
                 const isSelected = selectedQty > 0
                 const isFullyPaid = item.paid_quantity >= item.quantity
+                const isSelectableInItemsMode = splitMode === "items" && !isFullyPaid && !item.is_complimentary
 
                 return (
                   <div
                     key={item.id}
+                    onClick={(event) => {
+                      if (!isSelectableInItemsMode) return
+                      const target = event.target as HTMLElement
+                      if (target.closest("button, input, textarea, select, [role='checkbox']")) return
+                      toggleItemSelection(item.id, remainingQty)
+                    }}
                     className={`p-2 sm:p-3 rounded ${
                       splitMode === "items" ? "border-2" : "border"
-                    } ${isSelected ? "bg-blue-900/30 border-blue-700" : isFullyPaid ? "bg-green-900/20 border-green-700" : item.is_complimentary ? "bg-green-900/20 border-green-700" : "bg-slate-900 border-slate-700"}`}
+                    } ${
+                      isSelected
+                        ? "bg-blue-900/30 border-blue-700"
+                        : isFullyPaid
+                          ? "bg-green-900/20 border-green-700"
+                          : item.is_complimentary
+                            ? "bg-green-900/20 border-green-700"
+                            : "bg-slate-900 border-slate-700"
+                    } ${isSelectableInItemsMode ? "cursor-pointer" : ""}`}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
-                        {splitMode === "items" && !isFullyPaid && !item.is_complimentary && (
+                        {isSelectableInItemsMode && (
                           <Checkbox
                             checked={isSelected}
+                            onClick={(event) => event.stopPropagation()}
                             onCheckedChange={() => toggleItemSelection(item.id, remainingQty)}
                             className="flex-shrink-0"
                           />
@@ -1546,7 +1578,7 @@ export default function BillPage() {
                 )
               })}
 
-              {supplements.map((supplement) => (
+              {visibleSupplements.map((supplement) => (
                 <div
                   key={supplement.id}
                   className={`p-2 sm:p-3 rounded border ${supplement.is_complimentary ? "bg-green-900/20 border-green-700" : "bg-purple-900/20 border-purple-700"}`}
@@ -1596,6 +1628,17 @@ export default function BillPage() {
                     </span>
                     <span className="text-base sm:text-lg font-semibold">-{paidAmount.toFixed(2)} €</span>
                   </div>
+                  {employeeDiscountSupplements.map((supplement) => (
+                    <div key={supplement.id} className="flex justify-between items-center text-emerald-300">
+                      <span className="text-xs sm:text-sm">
+                        {supplement.name}
+                        {supplement.notes ? ` (${supplement.notes})` : ""}
+                      </span>
+                      <span className="text-base sm:text-lg font-semibold">
+                        -{Math.abs(Number(supplement.amount || 0)).toFixed(2)} €
+                      </span>
+                    </div>
+                  ))}
                   <div className="flex justify-between items-center pt-2 border-t border-slate-600">
                     <span className="text-lg sm:text-xl font-bold text-blue-400">Reste à payer</span>
                     <span className="text-2xl sm:text-3xl font-bold text-blue-400">{remainingAmount.toFixed(2)} €</span>
@@ -1613,7 +1656,7 @@ export default function BillPage() {
             <div className="space-y-3 sm:space-y-4 mb-4 sm:mb-6">
               <div>
                 <Label className="text-white mb-2 block text-sm sm:text-base">Type de règlement</Label>
-                <RadioGroup value={splitMode} onValueChange={(value: any) => setSplitMode(value)}>
+                <RadioGroup value={splitMode} onValueChange={(value: PaymentSplitMode) => setSplitMode(value)}>
                   <div className="flex items-center space-x-2 p-2 sm:p-3 rounded bg-slate-900 hover:bg-slate-750 cursor-pointer">
                     <RadioGroupItem value="full" id="full" />
                     <Label htmlFor="full" className="text-white cursor-pointer flex-1 text-sm sm:text-base">
@@ -1633,6 +1676,12 @@ export default function BillPage() {
                     <RadioGroupItem value="items" id="items" />
                     <Label htmlFor="items" className="text-white cursor-pointer flex-1 text-sm sm:text-base">
                       Par articles
+                    </Label>
+                  </div>
+                  <div className="flex items-center space-x-2 p-2 sm:p-3 rounded bg-slate-900 hover:bg-slate-750 cursor-pointer">
+                    <RadioGroupItem value="custom" id="custom" />
+                    <Label htmlFor="custom" className="text-white cursor-pointer flex-1 text-sm sm:text-base">
+                      Montant libre
                     </Label>
                   </div>
                 </RadioGroup>
@@ -1667,6 +1716,26 @@ export default function BillPage() {
                 </div>
               )}
 
+              {splitMode === "custom" && (
+                <div>
+                  <Label className="text-white text-sm sm:text-base">Montant libre</Label>
+                  <div className="space-y-2 mt-2">
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Montant que le client veut payer (€)"
+                      value={customAmount}
+                      onChange={(e) => setCustomAmount(e.target.value)}
+                      className="bg-slate-900 border-slate-700 text-white text-sm"
+                    />
+                    <p className="text-xs text-slate-400">
+                      Saisis le montant voulu par le client, le reste sera recalculé automatiquement.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {canUseEmployeeDiscount && (
                 <div
                   className={`p-2 sm:p-3 rounded border ${
@@ -1687,11 +1756,11 @@ export default function BillPage() {
                       disabled={disableEmployeeDiscountToggle}
                       className={
                         employeeDiscountActive
-                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                          ? "bg-red-600 hover:bg-red-700 text-white"
                           : "bg-slate-700 hover:bg-slate-600 text-white"
                       }
                     >
-                      {employeeDiscountActive ? "Actif" : "Activer"}
+                      {employeeDiscountActive ? "Désactiver" : "Activer"}
                     </Button>
                   </div>
                   {splitMode === "equal" && (
@@ -1699,9 +1768,9 @@ export default function BillPage() {
                       Indisponible en mode partage égal.
                     </p>
                   )}
-                  {showCustomAmount && (
+                  {splitMode === "custom" && (
                     <p className="text-xs text-amber-300 mt-2">
-                      Désactivé quand un montant personnalisé est saisi.
+                      Indisponible en mode montant libre.
                     </p>
                   )}
                   {splitMode === "items" && selectedItemsCount === 0 && (
@@ -1711,36 +1780,6 @@ export default function BillPage() {
                   )}
                 </div>
               )}
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <Label className="text-white text-sm sm:text-base">Montant personnalisé</Label>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setShowCustomAmount(!showCustomAmount)}
-                    className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600 text-xs sm:text-sm"
-                  >
-                    {showCustomAmount ? "Annuler" : "Modifier"}
-                  </Button>
-                </div>
-                {showCustomAmount && (
-                  <div className="space-y-2">
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      placeholder="Montant que le client veut payer (€)"
-                      value={customAmount}
-                      onChange={(e) => setCustomAmount(e.target.value)}
-                      className="bg-slate-900 border-slate-700 text-white text-sm"
-                    />
-                    <p className="text-xs text-slate-400">
-                      Le serveur peut saisir le montant exact que le client souhaite payer.
-                    </p>
-                  </div>
-                )}
-              </div>
             </div>
 
             <div className="bg-slate-900 p-3 sm:p-4 rounded-lg mb-4 sm:mb-6">
@@ -1753,13 +1792,13 @@ export default function BillPage() {
                     {employeeDiscountAmount.toFixed(2)} €
                   </p>
                 )}
-                {splitMode === "equal" && !showCustomAmount && (
+                {splitMode === "equal" && (
                   <p className="text-xs sm:text-sm text-slate-500 mt-1">
                     ({remainingAmount.toFixed(2)} € ÷ {splitCountValue})
                   </p>
                 )}
-                {showCustomAmount && customAmount && (
-                  <p className="text-xs sm:text-sm text-blue-400 mt-1">(Montant personnalisé)</p>
+                {splitMode === "custom" && customAmount && (
+                  <p className="text-xs sm:text-sm text-blue-400 mt-1">(Montant libre)</p>
                 )}
               </div>
             </div>
