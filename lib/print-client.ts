@@ -2,8 +2,9 @@
 
 import { buildEposXml, sampleTicket, sendToEpos, type EposTicket } from "@/lib/epos"
 import {
+  getNativeCapacitorPlatform,
   hasNativePrinterBridge,
-  isIosCapacitorRuntime,
+  isNativeCapacitorRuntime,
   nativePrintAirPrint,
   nativePrintTicket,
   type NativePrinterRole,
@@ -156,7 +157,7 @@ const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<Prin
 
 const runNativeAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
   if (!hasNativePrinterBridge()) {
-    return { ok: false, mode: "airprint", message: "Plugin AirPrint iOS indisponible." }
+    return { ok: false, mode: "airprint", message: "Plugin impression native indisponible." }
   }
 
   const response = await nativePrintAirPrint({
@@ -165,7 +166,7 @@ const runNativeAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<
   })
 
   if (response.ok) return { ok: true, mode: "airprint" }
-  return { ok: false, mode: "airprint", message: response.message || "Échec AirPrint natif" }
+  return { ok: false, mode: "airprint", message: response.message || "Echec impression systeme native" }
 }
 
 const readNativeEposErrorFromBody = (body?: string): { code?: string; message?: string } | null => {
@@ -187,17 +188,20 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
     return { ok: false, mode: "direct_epos", message: "IP imprimante manquante" }
   }
 
-  if (isIosCapacitorRuntime()) {
+  if (isNativeCapacitorRuntime()) {
+    const nativePlatform = getNativeCapacitorPlatform()
+    const nativeLabel = nativePlatform === "android" ? "Android" : "iOS"
+
     if (!hasNativePrinterBridge()) {
       const fallbackNoBridge = await runAirPrint(ticket, kind)
       if (fallbackNoBridge.ok) {
         return {
           ok: true,
           mode: "airprint",
-          message: "Plugin Epson iOS indisponible, AirPrint lancé.",
+          message: `Plugin Epson ${nativeLabel} indisponible, fallback impression système lancé.`,
         }
       }
-      return { ok: false, mode: "direct_epos", message: "Plugin iOS PrinterBridge indisponible." }
+      return { ok: false, mode: "direct_epos", message: `Plugin PrinterBridge ${nativeLabel} indisponible.` }
     }
 
     try {
@@ -220,13 +224,13 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
           ok: true,
           mode: "airprint",
           message: nativeResult.message
-            ? `Epson indisponible (${nativeResult.message}), fallback AirPrint lancé.`
-            : "Epson indisponible, fallback AirPrint lancé.",
+            ? `Epson indisponible (${nativeResult.message}), fallback impression systeme lance.`
+            : "Epson indisponible, fallback impression systeme lance.",
         }
       }
 
       const nativeMessage = nativeResult.message || "Échec impression Epson native"
-      const fallbackMessage = fallback.message ? ` Fallback AirPrint: ${fallback.message}` : ""
+      const fallbackMessage = fallback.message ? ` Fallback impression systeme: ${fallback.message}` : ""
       return { ok: false, mode: "direct_epos", message: `${nativeMessage}.${fallbackMessage}`.trim() }
     } catch (error) {
       const nativeMessage = error instanceof Error ? error.message : "Échec impression Epson native"
@@ -235,10 +239,10 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
         return {
           ok: true,
           mode: "airprint",
-          message: `Epson indisponible (${nativeMessage}), fallback AirPrint lancé.`,
+          message: `Epson indisponible (${nativeMessage}), fallback impression systeme lance.`,
         }
       }
-      return { ok: false, mode: "direct_epos", message: `${nativeMessage}. Fallback AirPrint échoué.` }
+      return { ok: false, mode: "direct_epos", message: `${nativeMessage}. Fallback impression systeme echoue.` }
     }
   }
 
@@ -266,17 +270,17 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
 }
 
 const runAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
-  if (isIosCapacitorRuntime() && hasNativePrinterBridge()) {
+  if (isNativeCapacitorRuntime() && hasNativePrinterBridge()) {
     return runNativeAirPrint(ticket, kind)
   }
 
   if (typeof window === "undefined") {
-    return { ok: false, mode: "airprint", message: "AirPrint indisponible sur ce terminal" }
+    return { ok: false, mode: "airprint", message: "Impression systeme indisponible sur ce terminal" }
   }
 
   const popup = window.open("", "_blank", "noopener,noreferrer")
   if (!popup) {
-    return { ok: false, mode: "airprint", message: "Autorise les popups pour lancer AirPrint" }
+    return { ok: false, mode: "airprint", message: "Autorise les popups pour lancer l'impression systeme" }
   }
 
   popup.document.open()

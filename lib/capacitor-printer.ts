@@ -1,6 +1,7 @@
 "use client"
 
 export type NativePrinterRole = "bar" | "kitchen" | "suites" | "caisse"
+export type NativeCapacitorPlatform = "ios" | "android"
 
 export type DiscoveredNativePrinter = {
   name: string
@@ -57,16 +58,31 @@ const normalizeNativeResult = (value: NativeBridgeResult | null | undefined) => 
   body: value?.body,
 })
 
-const toMessage = (error: unknown) => (error instanceof Error ? error.message : "Erreur plugin iOS")
+const toMessage = (error: unknown) => (error instanceof Error ? error.message : "Erreur plugin natif")
 
-export const isIosCapacitorRuntime = (): boolean => {
+export const getNativeCapacitorPlatform = (): NativeCapacitorPlatform | null => {
   const capacitor = getCapacitor()
-  if (!capacitor) return false
+  if (!capacitor) return null
 
   const platform = typeof capacitor.getPlatform === "function" ? capacitor.getPlatform() : capacitor.platform
   const isNative = typeof capacitor.isNativePlatform === "function" ? capacitor.isNativePlatform() : Boolean(capacitor.Plugins)
 
-  return platform === "ios" && isNative
+  if (!isNative) return null
+  if (platform === "ios") return "ios"
+  if (platform === "android") return "android"
+  return null
+}
+
+export const isNativeCapacitorRuntime = (): boolean => getNativeCapacitorPlatform() !== null
+
+export const isIosCapacitorRuntime = (): boolean => getNativeCapacitorPlatform() === "ios"
+
+export const isAndroidCapacitorRuntime = (): boolean => getNativeCapacitorPlatform() === "android"
+
+const getNativeRuntimeLabel = (platform: NativeCapacitorPlatform | null) => {
+  if (platform === "ios") return "iOS"
+  if (platform === "android") return "Android"
+  return "app native"
 }
 
 export const hasNativePrinterBridge = (): boolean => Boolean(getBridge())
@@ -76,13 +92,14 @@ export async function discoverNativePrinters(timeoutMs = 4000): Promise<{
   printers: DiscoveredNativePrinter[]
   message?: string
 }> {
-  if (!isIosCapacitorRuntime()) {
-    return { ok: false, printers: [], message: "Scan iOS disponible uniquement dans l'app native Capacitor." }
+  const platform = getNativeCapacitorPlatform()
+  if (!platform) {
+    return { ok: false, printers: [], message: "Scan disponible uniquement dans l'app native Capacitor." }
   }
 
   const bridge = getBridge()
   if (!bridge?.discoverPrinters) {
-    return { ok: false, printers: [], message: "Plugin iOS PrinterBridge indisponible." }
+    return { ok: false, printers: [], message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.` }
   }
 
   try {
@@ -114,9 +131,14 @@ export async function nativePrintTicket(payload: {
   status?: number
   body?: string
 }> {
+  const platform = getNativeCapacitorPlatform()
   const bridge = getBridge()
   if (!bridge?.printTicket) {
-    return { ok: false, code: "bridge_unavailable", message: "Plugin iOS PrinterBridge indisponible." }
+    return {
+      ok: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.`,
+    }
   }
 
   try {
@@ -132,9 +154,15 @@ export async function nativeGetPrinterStatus(payload: { ip: string }): Promise<{
   code?: string
   message?: string
 }> {
+  const platform = getNativeCapacitorPlatform()
   const bridge = getBridge()
   if (!bridge?.getPrinterStatus) {
-    return { ok: false, reachable: false, code: "bridge_unavailable", message: "Plugin iOS PrinterBridge indisponible." }
+    return {
+      ok: false,
+      reachable: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.`,
+    }
   }
 
   try {
@@ -157,9 +185,14 @@ export async function nativePrintAirPrint(payload: {
   code?: string
   message?: string
 }> {
+  const platform = getNativeCapacitorPlatform()
   const bridge = getBridge()
   if (!bridge?.printAirPrint) {
-    return { ok: false, code: "bridge_unavailable", message: "Plugin iOS PrinterBridge indisponible." }
+    return {
+      ok: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.`,
+    }
   }
 
   try {
@@ -169,4 +202,3 @@ export async function nativePrintAirPrint(payload: {
     return { ok: false, code: "unknown", message: toMessage(error) }
   }
 }
-

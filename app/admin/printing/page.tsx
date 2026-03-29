@@ -12,7 +12,7 @@ import { sampleTicket } from "@/lib/epos"
 import { printTicketWithConfiguredMode, type PrintMode } from "@/lib/print-client"
 import {
   discoverNativePrinters,
-  isIosCapacitorRuntime,
+  isNativeCapacitorRuntime,
   type DiscoveredNativePrinter,
 } from "@/lib/capacitor-printer"
 
@@ -24,13 +24,13 @@ export default function PrintingSettingsPage() {
   const [caisseIp, setCaisseIp] = useState("")
   const [printMode, setPrintMode] = useState<PrintMode>("server")
   const [savingPrint, setSavingPrint] = useState(false)
-  const [isIosCapacitor, setIsIosCapacitor] = useState(false)
+  const [isNativeCapacitor, setIsNativeCapacitor] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState("")
   const [discoveredPrinters, setDiscoveredPrinters] = useState<DiscoveredNativePrinter[]>([])
 
   useEffect(() => {
-    setIsIosCapacitor(isIosCapacitorRuntime())
+    setIsNativeCapacitor(isNativeCapacitorRuntime())
   }, [])
 
   useEffect(() => {
@@ -55,7 +55,7 @@ export default function PrintingSettingsPage() {
         setCaisseIp(data.caisse_ip || "")
         const modeFromDb: PrintMode =
           data.print_mode === "direct_epos" || data.print_mode === "airprint" ? data.print_mode : "server"
-        const effectiveMode = isIosCapacitorRuntime() && modeFromDb === "server" ? "direct_epos" : modeFromDb
+        const effectiveMode = isNativeCapacitorRuntime() && modeFromDb === "server" ? "direct_epos" : modeFromDb
         setPrintMode(effectiveMode)
       }
     } catch (error) {
@@ -64,15 +64,15 @@ export default function PrintingSettingsPage() {
   }
 
   useEffect(() => {
-    if (isIosCapacitor && printMode === "server") {
+    if (isNativeCapacitor && printMode === "server") {
       setPrintMode("direct_epos")
     }
-  }, [isIosCapacitor, printMode])
+  }, [isNativeCapacitor, printMode])
 
   const savePrintSettings = async () => {
     try {
       setSavingPrint(true)
-      const effectivePrintMode: PrintMode = isIosCapacitor && printMode === "server" ? "direct_epos" : printMode
+      const effectivePrintMode: PrintMode = isNativeCapacitor && printMode === "server" ? "direct_epos" : printMode
       const res = await fetch("/api/admin/print-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -222,20 +222,20 @@ export default function PrintingSettingsPage() {
                   onChange={(e) => setPrintMode(e.target.value as PrintMode)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
                 >
-                  {!isIosCapacitor && <option value="server">Serveur (Vercel)</option>}
+                  {!isNativeCapacitor && <option value="server">Serveur (Vercel)</option>}
                   <option value="direct_epos">Direct Epson (LAN local)</option>
-                  <option value="airprint">AirPrint (dialogue iPad)</option>
+                  <option value="airprint">Impression systeme (AirPrint / Android)</option>
                 </select>
                 <p className="text-xs text-slate-400 mt-1">
-                  {isIosCapacitor
-                    ? "Mode iOS natif: Epson LAN local avec fallback AirPrint."
+                  {isNativeCapacitor
+                    ? "Mode app native: Epson LAN local avec fallback impression systeme."
                     : "Direct Epson et AirPrint doivent etre lances depuis un appareil sur le Wi-Fi local du restaurant."}
                 </p>
               </div>
-              {isIosCapacitor && (
+              {isNativeCapacitor && (
                 <div className="rounded-md border border-slate-600 bg-slate-900/50 p-3 space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <Label className="text-sm text-slate-300">Scanner (iOS)</Label>
+                    <Label className="text-sm text-slate-300">Scanner (App native)</Label>
                     <Button size="sm" variant="outline" onClick={scanPrinters} disabled={isScanning}>
                       {isScanning ? "Scan en cours..." : "Scanner les imprimantes"}
                     </Button>
