@@ -30,6 +30,20 @@ type BillPaymentEntry = {
 }
 
 const PAYMENT_STATE_KEY = "payment_state_"
+const roundCurrency = (value: number) => Math.round((Number(value) || 0) * 100) / 100
+
+type EmployeeDiscountBreakdown = {
+  taxRate: 10 | 20
+  amount: number
+}
+
+type EmployeeDiscountPayload = {
+  type: "employee_50"
+  scope: "full" | "items"
+  amount: number
+  baseAmount: number
+  breakdown: EmployeeDiscountBreakdown[]
+}
 
 export default function BillPage() {
   const { user, isLoading } = useAuth()
@@ -57,6 +71,7 @@ export default function BillPage() {
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [customAmount, setCustomAmount] = useState("")
   const [showCustomAmount, setShowCustomAmount] = useState(false)
+  const [employeeDiscountActive, setEmployeeDiscountActive] = useState(false)
   const [offerDialog, setOfferDialog] = useState<{
     open: boolean
     itemId: string | null
@@ -84,6 +99,7 @@ export default function BillPage() {
   const [printingBillTicket, setPrintingBillTicket] = useState(false)
   const [printingMealTicket, setPrintingMealTicket] = useState(false)
   const canAccessBill = user?.role === "manager" || Boolean(user?.can_access_bill)
+  const canUseEmployeeDiscount = user?.role === "manager"
 
   const sanitizeIntegerInput = (value: string) => value.replace(/\D/g, "")
 
@@ -125,6 +141,7 @@ export default function BillPage() {
           setSelectedItemQuantities(new Map(Object.entries(parsed.selectedItemQuantities || {})))
           setCustomAmount(parsed.customAmount || "")
           setShowCustomAmount(parsed.showCustomAmount || false)
+          setEmployeeDiscountActive(Boolean(parsed.employeeDiscountActive))
         } catch (error) {
           console.error("[v0] Error loading payment state:", error)
         }
@@ -140,10 +157,18 @@ export default function BillPage() {
         selectedItemQuantities: Object.fromEntries(selectedItemQuantities),
         customAmount,
         showCustomAmount,
+        employeeDiscountActive,
       }
       localStorage.setItem(PAYMENT_STATE_KEY + tableId, JSON.stringify(state))
     }
-  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, showCustomAmount, loading])
+  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, showCustomAmount, employeeDiscountActive, loading])
+
+  useEffect(() => {
+    const unsupportedMode = splitMode !== "full" && splitMode !== "items"
+    if (!canUseEmployeeDiscount || showCustomAmount || unsupportedMode) {
+      setEmployeeDiscountActive(false)
+    }
+  }, [canUseEmployeeDiscount, splitMode, showCustomAmount])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -235,9 +260,14 @@ export default function BillPage() {
     return Math.max(0, calculateTotal() - paidAmount)
   }
 
-  const calculateSplitAmount = () => {
+  const getSupportedTaxRate = (value: number): 10 | 20 | null => {
+    if (value === 10 || value === 20) return value
+    return null
+  }
+
+  const calculateBaseSplitAmount = () => {
     if (showCustomAmount && customAmount && Number.parseFloat(customAmount) > 0) {
-      return Number.parseFloat(customAmount)
+      return roundCurrency(Number.parseFloat(customAmount))
     }
 
     const remaining = calculateRemainingAmount()
@@ -255,7 +285,89 @@ export default function BillPage() {
       amount = remaining
     }
 
-    return amount
+    return roundCurrency(Math.max(0, amount))
+  }
+
+  const buildEmployeeDiscountPayload = (baseAmountInput: number): EmployeeDiscountPayload | null => {
+    if (!employeeDiscountActive || !canUseEmployeeDiscount || showCustomAmount) return null
+    if (splitMode !== "full" && splitMode !== "items") return null
+
+    const baseAmount = roundCurrency(baseAmountInput)
+    if (baseAmount <= 0) return null
+
+    const discountAmount = roundCurrency(baseAmount * 0.5)
+    if (discountAmount <= 0) return null
+
+    const basisByTaxRate: Record<10 | 20, number> = { 10: 0, 20: 0 }
+
+    if (splitMode === "items") {
+      for (const item of items) {
+        if (item.is_complimentary) continue
+        const selectedQty = Number(selectedItemQuantities.get(item.id) || 0)
+        if (selectedQty <= 0) continue
+        const unitPrice = Number(item.price || 0)
+        if (unitPrice <= 0) continue
+        const taxRate = getSupportedTaxRate(Number(item.menu_item?.tax_rate || 0))
+        if (!taxRate) continue
+        basisByTaxRate[taxRate] += unitPrice * selectedQty
+      }
+    } else {
+      for (const item of items) {
+        if (item.is_complimentary) continue
+        const remainingQty = Math.max(0, Number(item.quantity || 0) - Number(item.paid_quantity || 0))
+        if (remainingQty <= 0) continue
+        const unitPrice = Number(item.price || 0)
+        if (unitPrice <= 0) continue
+        const taxRate = getSupportedTaxRate(Number(item.menu_item?.tax_rate || 0))
+        if (!taxRate) continue
+        basisByTaxRate[taxRate] += unitPrice * remainingQty
+      }
+
+      for (const supplement of supplements) {
+        if (supplement.is_complimentary) continue
+        const amount = Number(supplement.amount || 0)
+        if (amount <= 0) continue
+        const taxRate = getSupportedTaxRate(Number(supplement.tax_rate ?? 10))
+        if (!taxRate) continue
+        basisByTaxRate[taxRate] += amount
+      }
+    }
+
+    const basisTotal = basisByTaxRate[10] + basisByTaxRate[20]
+    let breakdown: EmployeeDiscountBreakdown[] = []
+
+    if (basisTotal > 0) {
+      if (basisByTaxRate[10] > 0 && basisByTaxRate[20] > 0) {
+        const amount10 = roundCurrency((discountAmount * basisByTaxRate[10]) / basisTotal)
+        const amount20 = roundCurrency(discountAmount - amount10)
+        if (amount10 > 0) breakdown.push({ taxRate: 10, amount: amount10 })
+        if (amount20 > 0) breakdown.push({ taxRate: 20, amount: amount20 })
+      } else if (basisByTaxRate[10] > 0) {
+        breakdown = [{ taxRate: 10, amount: discountAmount }]
+      } else if (basisByTaxRate[20] > 0) {
+        breakdown = [{ taxRate: 20, amount: discountAmount }]
+      }
+    }
+
+    if (breakdown.length === 0) {
+      breakdown = [{ taxRate: 10, amount: discountAmount }]
+    }
+
+    return {
+      type: "employee_50",
+      scope: splitMode,
+      amount: discountAmount,
+      baseAmount,
+      breakdown,
+    }
+  }
+
+  const getSplitComputation = () => {
+    const baseAmount = calculateBaseSplitAmount()
+    const discountPayload = buildEmployeeDiscountPayload(baseAmount)
+    const discountAmount = roundCurrency(discountPayload?.amount || 0)
+    const amount = roundCurrency(Math.max(0, baseAmount - discountAmount))
+    return { baseAmount, discountAmount, amount, discountPayload }
   }
 
   const handleQuantityChange = (itemId: string, quantity: number, maxQuantity: number) => {
@@ -284,11 +396,17 @@ export default function BillPage() {
 
   const handlePayment = async () => {
     try {
-      const amount = calculateSplitAmount()
+      const splitComputation = getSplitComputation()
+      const amount = splitComputation.amount
+      if (amount <= 0) {
+        alert("Le montant à régler doit être supérieur à 0 €.")
+        return
+      }
       const tipValue = Math.max(0, Number.parseFloat(tipAmount) || 0)
       const recordedBy = user?.id || null
 
       const itemQuantities = splitMode === "items" ? Object.fromEntries(selectedItemQuantities) : null
+      const discount = splitComputation.discountPayload
 
       const response = await fetch("/api/payments", {
         method: "POST",
@@ -300,6 +418,7 @@ export default function BillPage() {
           tableId,
           splitMode,
           itemQuantities,
+          discount,
           customAmount: showCustomAmount ? customAmount : null,
           tipAmount: tipValue,
           recordedBy,
@@ -311,6 +430,7 @@ export default function BillPage() {
         setPaymentDialog(false)
         setCustomAmount("")
         setShowCustomAmount(false)
+        setEmployeeDiscountActive(false)
         setCashGiven("")
         setTipAmount("")
         setCardTipDraft("")
@@ -326,9 +446,13 @@ export default function BillPage() {
           setSelectedItemQuantities(new Map())
           alert(`Paiement enregistré ! Reste à payer: ${result.remainingAmount.toFixed(2)} €`)
         }
+      } else {
+        const errorResult = await response.json().catch(() => ({}))
+        alert(errorResult?.error || "Erreur lors de l'encaissement")
       }
     } catch (error) {
       console.error("[v0] Error processing payment:", error)
+      alert("Erreur lors de l'encaissement")
     }
   }
 
@@ -1159,12 +1283,20 @@ export default function BillPage() {
 
   const total = calculateTotal()
   const remainingAmount = calculateRemainingAmount()
-  const splitAmount = calculateSplitAmount()
+  const splitComputation = getSplitComputation()
+  const splitAmount = splitComputation.amount
+  const employeeDiscountAmount = splitComputation.discountAmount
+  const employeeDiscountScope = splitComputation.discountPayload?.scope || null
   const cashGivenValue = Number.parseFloat(cashGiven) || 0
   const tipValue = Math.max(0, Number.parseFloat(tipAmount) || 0)
   const totalWithTip = splitAmount + tipValue
   const changeDue = paymentMethod === "cash" ? cashGivenValue - totalWithTip : 0
   const selectedItemsCount = Array.from(selectedItemQuantities.values()).reduce((sum, qty) => sum + qty, 0)
+  const isEmployeeDiscountEligible =
+    canUseEmployeeDiscount && !showCustomAmount && (splitMode === "full" || splitMode === "items")
+  const disableEmployeeDiscountToggle =
+    !isEmployeeDiscountEligible || (splitMode === "items" && selectedItemsCount === 0)
+  const disablePaymentActions = (splitMode === "items" && selectedItemsCount === 0) || splitAmount <= 0
   const complimentaryCount =
     items.filter((item) => item.is_complimentary).length + supplements.filter((sup) => sup.is_complimentary).length
   const billTicketHtml = buildBillTicketHtml()
@@ -1535,6 +1667,51 @@ export default function BillPage() {
                 </div>
               )}
 
+              {canUseEmployeeDiscount && (
+                <div
+                  className={`p-2 sm:p-3 rounded border ${
+                    employeeDiscountActive ? "bg-emerald-900/20 border-emerald-600" : "bg-slate-900 border-slate-700"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-white text-sm sm:text-base font-medium">-50% spécial salarié</p>
+                      <p className="text-xs text-slate-400">
+                        Disponible uniquement pour manager, en addition complète ou par articles.
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      type="button"
+                      onClick={() => setEmployeeDiscountActive((prev) => !prev)}
+                      disabled={disableEmployeeDiscountToggle}
+                      className={
+                        employeeDiscountActive
+                          ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                          : "bg-slate-700 hover:bg-slate-600 text-white"
+                      }
+                    >
+                      {employeeDiscountActive ? "Actif" : "Activer"}
+                    </Button>
+                  </div>
+                  {splitMode === "equal" && (
+                    <p className="text-xs text-amber-300 mt-2">
+                      Indisponible en mode partage égal.
+                    </p>
+                  )}
+                  {showCustomAmount && (
+                    <p className="text-xs text-amber-300 mt-2">
+                      Désactivé quand un montant personnalisé est saisi.
+                    </p>
+                  )}
+                  {splitMode === "items" && selectedItemsCount === 0 && (
+                    <p className="text-xs text-amber-300 mt-2">
+                      Sélectionne d'abord des articles pour appliquer la remise.
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <Label className="text-white text-sm sm:text-base">Montant personnalisé</Label>
@@ -1570,6 +1747,12 @@ export default function BillPage() {
               <div className="text-center">
                 <p className="text-slate-400 text-xs sm:text-sm mb-1">Montant à régler</p>
                 <p className="text-3xl sm:text-4xl font-bold text-blue-400">{splitAmount.toFixed(2)} €</p>
+                {employeeDiscountAmount > 0 && (
+                  <p className="text-xs sm:text-sm text-emerald-300 mt-1">
+                    Remise salarié -50% ({employeeDiscountScope === "items" ? "articles sélectionnés" : "addition"}) : -
+                    {employeeDiscountAmount.toFixed(2)} €
+                  </p>
+                )}
                 {splitMode === "equal" && !showCustomAmount && (
                   <p className="text-xs sm:text-sm text-slate-500 mt-1">
                     ({remainingAmount.toFixed(2)} € ÷ {splitCountValue})
@@ -1591,7 +1774,7 @@ export default function BillPage() {
                   setCardTipDraft("")
                 }}
                 className="w-full bg-green-600 hover:bg-green-700 text-white text-base sm:text-lg py-5 sm:py-6"
-                disabled={splitMode === "items" && selectedItemsCount === 0}
+                disabled={disablePaymentActions}
               >
                 <Banknote className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />
                 Espèces
@@ -1605,7 +1788,7 @@ export default function BillPage() {
                   setCardTipDraft("")
                 }}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white text-base sm:text-lg py-5 sm:py-6"
-                disabled={splitMode === "items" && selectedItemsCount === 0}
+                disabled={disablePaymentActions}
               >
                 <CreditCard className="h-4 w-4 sm:h-5 sm:w-5 mr-2" />
                 Carte bancaire

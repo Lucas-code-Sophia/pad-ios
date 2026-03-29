@@ -1,6 +1,30 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
 
+const toNumber = (value: unknown) => {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+const roundCurrency = (value: number) => Math.round((Number(value) || 0) * 100) / 100
+
+const toSupportedTaxRate = (value: unknown): 10 | 20 | null => {
+  const rate = Number(value)
+  if (rate === 10 || rate === 20) return rate
+  return null
+}
+
+type EmployeeDiscountBreakdown = {
+  taxRate: 10 | 20
+  amount: number
+}
+
+type EmployeeDiscountConfig = {
+  scope: "full" | "items"
+  amount: number
+  breakdown: EmployeeDiscountBreakdown[]
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { orderId, amount, paymentMethod, tableId, splitMode, itemQuantities, discount, tipAmount, recordedBy } =
@@ -11,15 +35,82 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing recordedBy" }, { status: 400 })
     }
 
+    const paymentAmount = roundCurrency(toNumber(amount))
+    if (paymentAmount <= 0) {
+      return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
+    }
+    const safeTipAmount = roundCurrency(Math.max(0, toNumber(tipAmount)))
+
+    let employeeDiscount: EmployeeDiscountConfig | null = null
+
+    if (discount && typeof discount === "object" && discount.type === "employee_50") {
+      const { data: requester, error: requesterError } = await supabase
+        .from("users")
+        .select("role")
+        .eq("id", recordedBy)
+        .maybeSingle()
+
+      if (requesterError || !requester || requester.role !== "manager") {
+        return NextResponse.json({ error: "Employee discount is manager-only" }, { status: 403 })
+      }
+
+      const discountAmount = roundCurrency(Math.max(0, toNumber(discount.amount)))
+      if (discountAmount <= 0) {
+        return NextResponse.json({ error: "Invalid employee discount amount" }, { status: 400 })
+      }
+
+      // -50% salarié => le montant encaissé doit correspondre au montant de remise.
+      if (Math.abs(discountAmount - paymentAmount) > 0.1) {
+        return NextResponse.json({ error: "Employee discount mismatch with payment amount" }, { status: 400 })
+      }
+
+      const scope: "full" | "items" = discount.scope === "items" ? "items" : "full"
+      const breakdownInput = Array.isArray(discount.breakdown) ? discount.breakdown : []
+
+      let normalizedBreakdown = breakdownInput
+        .map((entry: any) => {
+          const taxRate = toSupportedTaxRate(entry?.taxRate)
+          const entryAmount = roundCurrency(Math.max(0, toNumber(entry?.amount)))
+          if (!taxRate || entryAmount <= 0) return null
+          return { taxRate, amount: entryAmount }
+        })
+        .filter(Boolean) as EmployeeDiscountBreakdown[]
+
+      if (normalizedBreakdown.length === 0) {
+        normalizedBreakdown = [{ taxRate: 10, amount: discountAmount }]
+      } else {
+        const breakdownTotal = normalizedBreakdown.reduce((sum, row) => sum + row.amount, 0)
+        if (breakdownTotal <= 0) {
+          normalizedBreakdown = [{ taxRate: 10, amount: discountAmount }]
+        } else {
+          const scaledRows = normalizedBreakdown.map((row) => ({
+            taxRate: row.taxRate,
+            amount: roundCurrency((row.amount / breakdownTotal) * discountAmount),
+          }))
+          const scaledTotal = scaledRows.reduce((sum, row) => sum + row.amount, 0)
+          const delta = roundCurrency(discountAmount - scaledTotal)
+          if (scaledRows.length > 0 && Math.abs(delta) > 0) {
+            scaledRows[scaledRows.length - 1].amount = roundCurrency(scaledRows[scaledRows.length - 1].amount + delta)
+          }
+          normalizedBreakdown = scaledRows.filter((row) => row.amount > 0)
+          if (normalizedBreakdown.length === 0) {
+            normalizedBreakdown = [{ taxRate: 10, amount: discountAmount }]
+          }
+        }
+      }
+
+      employeeDiscount = { scope, amount: discountAmount, breakdown: normalizedBreakdown }
+    }
+
     const { data: paymentData, error: paymentError } = await supabase
       .from("payments")
       .insert({
         order_id: orderId,
-        amount,
+        amount: paymentAmount,
         payment_method: paymentMethod,
-        tip_amount: Math.max(0, Number(tipAmount) || 0),
+        tip_amount: safeTipAmount,
         recorded_by: recordedBy,
-        metadata: { splitMode, itemQuantities, discount },
+        metadata: { splitMode, itemQuantities, discount: employeeDiscount },
       })
       .select()
       .single()
@@ -27,6 +118,27 @@ export async function POST(request: NextRequest) {
     if (paymentError) {
       console.error("[v0] Error recording payment:", paymentError)
       return NextResponse.json({ error: "Failed to record payment" }, { status: 500 })
+    }
+
+    if (employeeDiscount) {
+      const discountSupplements = employeeDiscount.breakdown.map((row) => ({
+        order_id: orderId,
+        name: "Remise salarié -50 %",
+        amount: -roundCurrency(row.amount),
+        tax_rate: row.taxRate,
+        notes:
+          employeeDiscount.scope === "items"
+            ? "Remise -50% sur les articles sélectionnés"
+            : "Remise -50% sur l'addition",
+        is_complimentary: false,
+      }))
+
+      const { error: discountError } = await supabase.from("supplements").insert(discountSupplements)
+      if (discountError) {
+        console.error("[v0] Error applying employee discount:", discountError)
+        await supabase.from("payments").delete().eq("id", paymentData.id)
+        return NextResponse.json({ error: "Failed to apply employee discount" }, { status: 500 })
+      }
     }
 
     if (splitMode === "items" && itemQuantities) {
@@ -72,14 +184,14 @@ export async function POST(request: NextRequest) {
       .eq("order_id", orderId)
 
     // Calculer les totaux
-    const itemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? 0 : item.price * item.quantity), 0) || 0
-    const supplementsTotal = supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? 0 : sup.amount), 0) || 0
+    const itemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? 0 : toNumber(item.price) * toNumber(item.quantity)), 0) || 0
+    const supplementsTotal = supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? 0 : toNumber(sup.amount)), 0) || 0
     const orderTotal = itemsTotal + supplementsTotal
 
     // Calculer les articles offerts
-    const complimentaryItemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? item.price * item.quantity : 0), 0) || 0
-    const complimentarySupplementsTotal = supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? sup.amount : 0), 0) || 0
-    const complimentaryItemsCount = orderItems?.filter(item => item.is_complimentary).reduce((sum, item) => sum + item.quantity, 0) || 0
+    const complimentaryItemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? toNumber(item.price) * toNumber(item.quantity) : 0), 0) || 0
+    const complimentarySupplementsTotal = supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? toNumber(sup.amount) : 0), 0) || 0
+    const complimentaryItemsCount = orderItems?.filter(item => item.is_complimentary).reduce((sum, item) => sum + toNumber(item.quantity), 0) || 0
     const complimentarySupplementsCount = supplements?.filter(sup => sup.is_complimentary).length || 0
     
     const totalComplimentaryAmount = complimentaryItemsTotal + complimentarySupplementsTotal
