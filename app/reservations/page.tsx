@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Reservation, Table } from "@/lib/types"
@@ -59,12 +59,13 @@ export default function ReservationsPage() {
 
   const [newReservation, setNewReservation] = useState({
     table_id: "",
+    table_ids: [] as string[],
     customer_name: "",
     customer_phone: "",
-    reservation_date: new Date().toISOString().split("T")[0],
+    reservation_date: selectedDate,
     reservation_time: "19:00",
     party_size: "2",
-    duration_minutes: 120,
+    duration_minutes: 90,
     notes: "",
     created_by: "",
   })
@@ -77,12 +78,14 @@ export default function ReservationsPage() {
   const [visualLayouts, setVisualLayouts] = useState<VisualFloorPlan[]>([])
   const [pickerReservations, setPickerReservations] = useState<Record<string, Reservation[]>>({})
   const [pickerLoading, setPickerLoading] = useState(false)
+  const [pickerSelectedTableIds, setPickerSelectedTableIds] = useState<string[]>([])
 
   // Edit reservation state
   const [showEditReservation, setShowEditReservation] = useState(false)
   const [editingReservation, setEditingReservation] = useState<{
     id: string
     table_id: string
+    table_ids: string[]
     customer_name: string
     customer_phone: string
     reservation_date: string
@@ -98,6 +101,28 @@ export default function ReservationsPage() {
   const parseIntegerInput = (value: string) => {
     const parsed = Number.parseInt(value, 10)
     return Number.isFinite(parsed) ? parsed : null
+  }
+
+  const parseTimeToMinutes = (time: string) => {
+    const [hours, minutes] = String(time || "")
+      .slice(0, 5)
+      .split(":")
+      .map((x) => Number.parseInt(x, 10))
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null
+    return hours * 60 + minutes
+  }
+
+  const hasTimeOverlap = (startA: number, durationA: number, startB: number, durationB: number) => {
+    const endA = startA + durationA
+    const endB = startB + durationB
+    return !(endA <= startB || startA >= endB)
+  }
+
+  const getReservationTableIds = (reservation: Reservation) => {
+    if (Array.isArray(reservation.table_ids) && reservation.table_ids.length > 0) {
+      return reservation.table_ids
+    }
+    return reservation.table_id ? [reservation.table_id] : []
   }
 
   useEffect(() => {
@@ -244,6 +269,13 @@ export default function ReservationsPage() {
 
   const openTablePicker = async (target: "add" | "edit") => {
     setTablePickerTarget(target)
+    const initialSelection =
+      target === "add"
+        ? [...newReservation.table_ids]
+        : editingReservation
+          ? [...editingReservation.table_ids]
+          : []
+    setPickerSelectedTableIds(initialSelection)
     // Close the dialog first so Radix doesn't block clicks
     if (target === "add") setShowAddReservation(false)
     else setShowEditReservation(false)
@@ -265,9 +297,12 @@ export default function ReservationsPage() {
           const data: Reservation[] = await response.json()
           const map: Record<string, Reservation[]> = {}
           for (const r of data) {
-            if (r.status === "cancelled") continue
-            if (!map[r.table_id]) map[r.table_id] = []
-            map[r.table_id].push(r)
+            if (r.status === "cancelled" || r.status === "completed") continue
+            const reservationTableIds = getReservationTableIds(r)
+            for (const tableId of reservationTableIds) {
+              if (!map[tableId]) map[tableId] = []
+              map[tableId].push(r)
+            }
           }
           for (const k of Object.keys(map)) {
             map[k].sort((a, b) => (a.reservation_time < b.reservation_time ? -1 : 1))
@@ -283,49 +318,139 @@ export default function ReservationsPage() {
 
   const closeTablePicker = () => {
     setShowTablePicker(false)
+    setPickerSelectedTableIds([])
     // Reopen the dialog
     if (tablePickerTarget === "add") setShowAddReservation(true)
     else setShowEditReservation(true)
   }
 
   const handlePickerTableSelect = (tableId: string) => {
+    setPickerSelectedTableIds((prev) => {
+      const isSelected = prev.includes(tableId)
+      return isSelected ? prev.filter((id) => id !== tableId) : [...prev, tableId]
+    })
+  }
+
+  const confirmTablePickerSelection = () => {
+    const orderedTableIds = [...pickerSelectedTableIds]
     if (tablePickerTarget === "add") {
-      setNewReservation((prev) => ({ ...prev, table_id: tableId }))
+      setNewReservation((prev) => ({
+        ...prev,
+        table_ids: orderedTableIds,
+        table_id: orderedTableIds[0] || "",
+      }))
     } else if (editingReservation) {
-      setEditingReservation({ ...editingReservation, table_id: tableId })
+      setEditingReservation({
+        ...editingReservation,
+        table_ids: orderedTableIds,
+        table_id: orderedTableIds[0] || "",
+      })
     }
     setShowTablePicker(false)
-    // Reopen the dialog
+    setPickerSelectedTableIds([])
     if (tablePickerTarget === "add") setShowAddReservation(true)
     else setShowEditReservation(true)
   }
 
-  const getPickerSummary = (tableId: string) => {
-    const arr = pickerReservations[tableId] || []
-    if (arr.length === 0) return ""
-    return arr.map((r) => {
-      const prefix = r.status === "pending" ? "⏳ " : ""
-      return `${prefix}${r.party_size}p – ${(r.reservation_time || "").slice(0, 5).replace(":", "h")}`
-    }).join(", ")
+  const getPickerTableReservationContext = (tableId: string) => {
+    const reservationsForTable = (pickerReservations[tableId] || [])
+      .filter((reservation) => ["pending", "confirmed", "seated"].includes(reservation.status))
+      .sort((a, b) => String(a.reservation_time || "").localeCompare(String(b.reservation_time || "")))
+
+    const targetTime = tablePickerTarget === "add" ? newReservation.reservation_time : editingReservation?.reservation_time || ""
+    const targetDuration = Number(
+      tablePickerTarget === "add" ? newReservation.duration_minutes : editingReservation?.duration_minutes || 90,
+    )
+    const safeTargetDuration = Number.isFinite(targetDuration) && targetDuration > 0 ? targetDuration : 90
+    const targetStart = parseTimeToMinutes(targetTime)
+    const targetReservationId = tablePickerTarget === "edit" ? editingReservation?.id : ""
+
+    const overlappingReservations: Reservation[] = []
+    const nonOverlappingReservations: Reservation[] = []
+
+    for (const reservation of reservationsForTable) {
+      if (targetReservationId && reservation.id === targetReservationId) continue
+
+      const reservationStart = parseTimeToMinutes(reservation.reservation_time)
+      const reservationDuration = Number(reservation.duration_minutes || 90)
+      const safeReservationDuration =
+        Number.isFinite(reservationDuration) && reservationDuration > 0 ? reservationDuration : 90
+
+      const hasOverlap =
+        targetStart != null &&
+        reservationStart != null &&
+        hasTimeOverlap(targetStart, safeTargetDuration, reservationStart, safeReservationDuration)
+
+      if (hasOverlap) overlappingReservations.push(reservation)
+      else nonOverlappingReservations.push(reservation)
+    }
+
+    const otherSlots = Array.from(
+      new Set(
+        nonOverlappingReservations
+          .map((reservation) => String(reservation.reservation_time || "").slice(0, 5))
+          .filter((hour) => Boolean(hour)),
+      ),
+    ).sort((a, b) => a.localeCompare(b))
+
+    const compactSlots = otherSlots.slice(0, 3)
+    const remaining = Math.max(otherSlots.length - compactSlots.length, 0)
+    const otherSlotsLabel = otherSlots.length === 0
+      ? ""
+      : remaining > 0
+        ? `Autres résas: ${compactSlots.join(", ")} +${remaining}`
+        : `${otherSlots.length > 1 ? "Autres résas" : "Autre résa"}: ${compactSlots.join(", ")}`
+
+    return {
+      overlappingReservations,
+      nonOverlappingReservations,
+      hasOverlap: overlappingReservations.length > 0,
+      hasOtherSlots: nonOverlappingReservations.length > 0,
+      otherSlotsLabel,
+    }
   }
 
-  const hasOnlyPendingResas = (tableId: string) => {
-    const arr = pickerReservations[tableId] || []
-    return arr.length > 0 && arr.every((r) => r.status === "pending")
+  const getTableNumber = (tableId: string) => {
+    const t = tables.find((table) => table.id === tableId)
+    return t?.table_number || tableId
   }
 
-  const getTableName = (tableId: string) => {
-    const t = tables.find((t) => t.id === tableId)
-    return t ? `${t.table_number} (${t.seats} pl.)` : ""
+  const getTableNumbersLabel = (tableIds: string[]) => {
+    if (!tableIds || tableIds.length === 0) return ""
+    return tableIds.map((tableId) => getTableNumber(tableId)).join(", ")
+  }
+
+  const getTotalSeatsForTables = (tableIds: string[]) => {
+    return tableIds.reduce((sum, tableId) => {
+      const table = tables.find((t) => t.id === tableId)
+      return sum + (table?.seats || 0)
+    }, 0)
+  }
+
+  const getPickerSelectedTableIds = () => {
+    return pickerSelectedTableIds
+  }
+
+  const getPickerTargetPartySize = () => {
+    const rawValue = tablePickerTarget === "add" ? newReservation.party_size : editingReservation?.party_size || ""
+    return parseIntegerInput(rawValue) || 0
+  }
+
+  const getReservationTableNumbers = (reservation: Reservation) => {
+    if (Array.isArray(reservation.table_numbers) && reservation.table_numbers.length > 0) {
+      return reservation.table_numbers
+    }
+    const tableIds = getReservationTableIds(reservation)
+    return tableIds.map((tableId) => getTableNumber(tableId))
   }
 
   const handleAddReservation = async () => {
     setAddError("")
     const parsedPartySize = parseIntegerInput(newReservation.party_size)
+    const selectedTableIds = newReservation.table_ids
     const missing: string[] = []
     if (!newReservation.customer_name.trim()) missing.push("Nom du client")
-    if (!newReservation.customer_phone.trim()) missing.push("Téléphone")
-    if (!newReservation.table_id) missing.push("Table")
+    if (selectedTableIds.length === 0) missing.push("Table")
     if (!newReservation.reservation_date) missing.push("Date")
     if (!newReservation.reservation_time) missing.push("Heure")
     if (!parsedPartySize || parsedPartySize < 1) missing.push("Nombre de personnes")
@@ -337,6 +462,8 @@ export default function ReservationsPage() {
     try {
       const payload = {
         ...newReservation,
+        table_ids: selectedTableIds,
+        table_id: selectedTableIds[0] || "",
         party_size: parsedPartySize,
         created_by: user?.id || null,
         whatsapp_confirmation_requested: waConfirmEnabled,
@@ -358,12 +485,13 @@ export default function ReservationsPage() {
       setAddError("")
       setNewReservation({
         table_id: "",
+        table_ids: [],
         customer_name: "",
         customer_phone: "",
-        reservation_date: new Date().toISOString().split("T")[0],
+        reservation_date: selectedDate,
         reservation_time: "19:00",
         party_size: "2",
-        duration_minutes: 120,
+        duration_minutes: 90,
         notes: "",
         created_by: "",
       })
@@ -413,15 +541,17 @@ export default function ReservationsPage() {
   }
 
   const openEditDialog = (reservation: Reservation) => {
+    const tableIds = getReservationTableIds(reservation)
     setEditingReservation({
       id: reservation.id,
-      table_id: reservation.table_id,
+      table_id: tableIds[0] || reservation.table_id,
+      table_ids: tableIds,
       customer_name: reservation.customer_name,
       customer_phone: reservation.customer_phone || "",
       reservation_date: reservation.reservation_date,
       reservation_time: (reservation.reservation_time || "").slice(0, 5),
       party_size: String(reservation.party_size),
-      duration_minutes: reservation.duration_minutes || 120,
+      duration_minutes: reservation.duration_minutes || 90,
       notes: reservation.notes || "",
     })
     setEditError("")
@@ -432,10 +562,10 @@ export default function ReservationsPage() {
     if (!editingReservation) return
     setEditError("")
     const parsedPartySize = parseIntegerInput(editingReservation.party_size)
+    const selectedTableIds = editingReservation.table_ids
     const missing: string[] = []
     if (!editingReservation.customer_name.trim()) missing.push("Nom du client")
-    if (!editingReservation.customer_phone.trim()) missing.push("Téléphone")
-    if (!editingReservation.table_id) missing.push("Table")
+    if (selectedTableIds.length === 0) missing.push("Table")
     if (!editingReservation.reservation_date) missing.push("Date")
     if (!editingReservation.reservation_time) missing.push("Heure")
     if (!parsedPartySize || parsedPartySize < 1) missing.push("Nombre de personnes")
@@ -451,6 +581,8 @@ export default function ReservationsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...body,
+          table_ids: selectedTableIds,
+          table_id: selectedTableIds[0] || "",
           party_size: parsedPartySize,
         }),
       })
@@ -617,6 +749,12 @@ export default function ReservationsPage() {
   }
 
   const calendarDays = buildCalendarDays()
+  const pickerSelectedIds = getPickerSelectedTableIds()
+  const pickerSelectedSeats = getTotalSeatsForTables(pickerSelectedIds)
+  const pickerTargetPartySize = getPickerTargetPartySize()
+  const pickerCapacityMissing = pickerTargetPartySize > 0 && pickerSelectedSeats < pickerTargetPartySize
+  const pickerDateValue =
+    (tablePickerTarget === "add" ? newReservation.reservation_date : editingReservation?.reservation_date) || ""
 
   return (
     <div className="min-h-screen bg-slate-900 p-3 sm:p-4">
@@ -663,7 +801,30 @@ export default function ReservationsPage() {
             </button>
           </div>
 
-          <Dialog open={showAddReservation} onOpenChange={(open) => { setShowAddReservation(open); if (!open) setAddError("") }}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => router.push(`/floor-plan?reservationDate=${encodeURIComponent(selectedDate)}`)}
+            className="bg-cyan-700/30 border-cyan-600 text-cyan-200 hover:bg-cyan-700/50"
+          >
+            <MapPin className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+            <span className="text-xs sm:text-sm">Plan du jour</span>
+          </Button>
+
+          <Dialog
+            open={showAddReservation}
+            onOpenChange={(open) => {
+              setShowAddReservation(open)
+              if (open) {
+                setNewReservation((prev) => ({
+                  ...prev,
+                  reservation_date: selectedDate,
+                }))
+              } else {
+                setAddError("")
+              }
+            }}
+          >
             <DialogTrigger asChild>
               <Button size="sm" className="bg-green-600 hover:bg-green-700">
                 <Plus className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
@@ -691,7 +852,7 @@ export default function ReservationsPage() {
                   />
                 </div>
                 <div>
-                  <Label className="text-sm">Téléphone <span className="text-red-400">*</span></Label>
+                  <Label className="text-sm">Téléphone</Label>
                   <Input
                     value={newReservation.customer_phone}
                     onChange={(e) => setNewReservation({ ...newReservation, customer_phone: e.target.value })}
@@ -756,11 +917,27 @@ export default function ReservationsPage() {
                       className="w-full justify-start bg-slate-700 border-slate-600 text-sm hover:bg-slate-600 h-10"
                     >
                       <MapPin className="h-3.5 w-3.5 mr-2 shrink-0 text-blue-400" />
-                      {newReservation.table_id
-                        ? <span className="truncate">{getTableName(newReservation.table_id)}</span>
+                      {newReservation.table_ids.length > 0
+                        ? <span className="truncate">{getTableNumbersLabel(newReservation.table_ids)}</span>
                         : <span className="text-slate-400">Choisir sur le plan...</span>
                       }
                     </Button>
+                    {newReservation.table_ids.length > 0 && (
+                      <p className="text-xs text-slate-400 mt-1">
+                        {newReservation.table_ids.length} table{newReservation.table_ids.length > 1 ? "s" : ""} ·{" "}
+                        {getTotalSeatsForTables(newReservation.table_ids)} places
+                      </p>
+                    )}
+                    {(() => {
+                      const people = parseIntegerInput(newReservation.party_size) || 0
+                      const seats = getTotalSeatsForTables(newReservation.table_ids)
+                      if (people <= 0 || seats >= people) return null
+                      return (
+                        <p className="text-xs text-amber-400 mt-1">
+                          Capacité insuffisante: {seats} place{seats > 1 ? "s" : ""} pour {people} personne{people > 1 ? "s" : ""}.
+                        </p>
+                      )
+                    })()}
                   </div>
                 </div>
                 <div>
@@ -1048,7 +1225,10 @@ export default function ReservationsPage() {
                 </div>
                 <div className="flex items-center gap-2 text-slate-300 text-sm">
                   <Calendar className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
-                  <span>Table {(reservation as any).tables?.table_number || "N/A"}</span>
+                  <span>
+                    Tables {getReservationTableNumbers(reservation).join(", ") || "N/A"}
+                    {reservation.total_seats ? ` (${reservation.total_seats} places)` : ""}
+                  </span>
                 </div>
                 {reservation.notes && (
                   <div className="text-xs sm:text-sm text-slate-400 bg-slate-700 p-2 rounded break-words">
@@ -1216,7 +1396,7 @@ export default function ReservationsPage() {
                 />
               </div>
               <div>
-                <Label className="text-sm">Téléphone <span className="text-red-400">*</span></Label>
+                <Label className="text-sm">Téléphone</Label>
                 <Input
                   value={editingReservation.customer_phone}
                   onChange={(e) =>
@@ -1293,11 +1473,27 @@ export default function ReservationsPage() {
                     className="w-full justify-start bg-slate-700 border-slate-600 text-sm hover:bg-slate-600 h-10"
                   >
                     <MapPin className="h-3.5 w-3.5 mr-2 shrink-0 text-blue-400" />
-                    {editingReservation.table_id
-                      ? <span className="truncate">{getTableName(editingReservation.table_id)}</span>
+                    {editingReservation.table_ids.length > 0
+                      ? <span className="truncate">{getTableNumbersLabel(editingReservation.table_ids)}</span>
                       : <span className="text-slate-400">Choisir sur le plan...</span>
                     }
                   </Button>
+                  {editingReservation.table_ids.length > 0 && (
+                    <p className="text-xs text-slate-400 mt-1">
+                      {editingReservation.table_ids.length} table{editingReservation.table_ids.length > 1 ? "s" : ""} ·{" "}
+                      {getTotalSeatsForTables(editingReservation.table_ids)} places
+                    </p>
+                  )}
+                  {(() => {
+                    const people = parseIntegerInput(editingReservation.party_size) || 0
+                    const seats = getTotalSeatsForTables(editingReservation.table_ids)
+                    if (people <= 0 || seats >= people) return null
+                    return (
+                      <p className="text-xs text-amber-400 mt-1">
+                        Capacité insuffisante: {seats} place{seats > 1 ? "s" : ""} pour {people} personne{people > 1 ? "s" : ""}.
+                      </p>
+                    )
+                  })()}
                 </div>
               </div>
               <div>
@@ -1338,28 +1534,62 @@ export default function ReservationsPage() {
         <div className="fixed inset-0 z-[9999] bg-slate-900 flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-2 bg-slate-900 border-b border-slate-700 shrink-0">
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 min-w-0">
               <MapPin className="h-5 w-5 text-blue-400" />
-              <div>
-                <h2 className="text-white font-semibold text-sm sm:text-base">Choisir une table</h2>
+              <div className="min-w-0">
+                <h2 className="text-white font-semibold text-sm sm:text-base">Choisir une ou plusieurs tables</h2>
                 <p className="text-slate-400 text-xs">
                   Réservations du{" "}
-                  {new Date(
-                    (tablePickerTarget === "add" ? newReservation.reservation_date : editingReservation?.reservation_date) || ""
-                  ).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}
+                  {pickerDateValue
+                    ? new Date(`${pickerDateValue}T00:00:00`).toLocaleDateString("fr-FR", {
+                        weekday: "long",
+                        day: "numeric",
+                        month: "long",
+                      })
+                    : "N/A"}
                   {" · "}
                   <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: "#16a34a" }} /> Dispo</span>
                   {" · "}
-                  <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: "#ea580c" }} /> Réservée</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block w-2 h-2 rounded-sm border border-orange-300" style={{ backgroundColor: "#16a34a" }} />
+                    Dispo (autres créneaux)
+                  </span>
+                  {" · "}
+                  <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-red-500" /> Conflit horaire</span>
                 </p>
+                <p className="text-slate-300 text-xs mt-0.5">
+                  {pickerSelectedIds.length} table{pickerSelectedIds.length > 1 ? "s" : ""} · {pickerSelectedSeats} places
+                </p>
+                {pickerCapacityMissing && (
+                  <p className="text-amber-400 text-xs mt-0.5">
+                    Capacité insuffisante: {pickerSelectedSeats} place{pickerSelectedSeats > 1 ? "s" : ""} pour{" "}
+                    {pickerTargetPartySize} personne{pickerTargetPartySize > 1 ? "s" : ""}.
+                  </p>
+                )}
               </div>
             </div>
-            <button
-              onClick={closeTablePicker}
-              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={closeTablePicker}
+                className="bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200 text-xs sm:text-sm h-9"
+              >
+                Annuler
+              </Button>
+              <Button
+                onClick={confirmTablePickerSelection}
+                className="bg-blue-600 hover:bg-blue-700 text-xs sm:text-sm h-9"
+              >
+                Valider
+              </Button>
+              <button
+                onClick={closeTablePicker}
+                className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"
+                aria-label="Fermer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
 
           {/* Map content — fills all remaining space */}
@@ -1375,22 +1605,37 @@ export default function ReservationsPage() {
                   <p className="text-slate-500 text-xs">Sélection classique :</p>
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-w-lg mx-auto">
                     {tables.map((table) => {
-                      const hasResa = (pickerReservations[table.id] || []).length > 0
-                      const onlyPending = hasOnlyPendingResas(table.id)
+                      const tableContext = getPickerTableReservationContext(table.id)
+                      const isSelected = pickerSelectedIds.includes(table.id)
+                      const hasConflict = tableContext.hasOverlap
+                      const hasOtherSlots = tableContext.hasOtherSlots
+                      const isDisabled = hasConflict && !isSelected
                       return (
                         <button
                           key={table.id}
                           onClick={() => handlePickerTableSelect(table.id)}
-                          className={`p-3 rounded-lg text-white font-medium text-sm transition-all hover:scale-105 active:scale-95 ${
-                            hasResa
-                              ? onlyPending ? "bg-amber-600 hover:bg-amber-500" : "bg-orange-600 hover:bg-orange-500"
-                              : "bg-green-600 hover:bg-green-500"
+                          disabled={isDisabled}
+                          className={`p-3 rounded-lg border-2 text-white font-medium text-sm transition-all ${
+                            isDisabled ? "opacity-60 cursor-not-allowed" : "hover:scale-105 active:scale-95"
+                          } ${
+                            isSelected
+                              ? "bg-blue-600 ring-2 ring-blue-300 border-blue-300"
+                              : hasConflict
+                                ? "bg-red-600 border-red-300"
+                                : hasOtherSlots
+                                  ? "bg-green-600 hover:bg-green-500 border-orange-300"
+                                  : "bg-green-600 hover:bg-green-500 border-white/30"
                           }`}
                         >
                           <div>{table.table_number}</div>
                           <div className="text-[10px] opacity-80">{table.seats} pl.</div>
-                          {hasResa && (
-                            <div className="text-[9px] mt-1 opacity-90">{getPickerSummary(table.id)}</div>
+                          {hasConflict ? (
+                            <div className="text-[9px] mt-1 opacity-90">Conflit horaire</div>
+                          ) : hasOtherSlots ? (
+                            <div className="text-[9px] mt-1 opacity-90">{tableContext.otherSlotsLabel}</div>
+                          ) : null}
+                          {isSelected && (
+                            <div className="text-[9px] mt-1 font-semibold">Sélectionnée</div>
                           )}
                         </button>
                       )
@@ -1432,43 +1677,60 @@ export default function ReservationsPage() {
                         // Table item
                         const table = tables.find((t) => t.id === item.tableId)
                         if (!table) return null
-                        const resasForTable = pickerReservations[table.id] || []
-                        const hasResa = resasForTable.length > 0
-                        const onlyPending = hasOnlyPendingResas(table.id)
-                        const isCurrentlySelected =
-                          (tablePickerTarget === "add" ? newReservation.table_id : editingReservation?.table_id) === table.id
+                        const tableContext = getPickerTableReservationContext(table.id)
+                        const isCurrentlySelected = pickerSelectedIds.includes(table.id)
+                        const hasConflict = tableContext.hasOverlap
+                        const hasOtherSlots = tableContext.hasOtherSlots
+                        const isDisabled = hasConflict && !isCurrentlySelected
 
                         return (
                           <button
                             key={item.id}
                             onClick={() => handlePickerTableSelect(table.id)}
-                            className={`absolute flex flex-col items-center justify-center text-white font-bold select-none cursor-pointer transition-all hover:scale-110 active:scale-95 ${
-                              isCurrentlySelected ? "ring-3 ring-yellow-400 z-30" : "z-10"
+                            disabled={isDisabled}
+                            className={`absolute flex flex-col items-center justify-center text-white font-bold select-none transition-all ${
+                              isDisabled ? "cursor-not-allowed opacity-60" : "cursor-pointer hover:scale-110 active:scale-95"
+                            } ${
+                              isCurrentlySelected ? "z-30" : "z-10"
                             }`}
                             style={{
                               left: `${item.x}%`,
                               top: `${item.y}%`,
                               width: `${item.width}%`,
                               height: `${item.height}%`,
-                              backgroundColor: isCurrentlySelected ? "#eab308" : hasResa ? (onlyPending ? "#d97706" : "#ea580c") : "#16a34a",
+                              backgroundColor: isCurrentlySelected
+                                ? "#2563eb"
+                                : hasConflict
+                                  ? "#dc2626"
+                                  : "#16a34a",
                               borderRadius: item.shape === "round" ? "50%" : "6px",
                               fontSize: "clamp(9px, 1.2vw, 16px)",
                               border: isCurrentlySelected
-                                ? "3px solid #fde047"
+                                ? "3px solid #93c5fd"
+                                : hasConflict
+                                  ? "2px solid #fca5a5"
+                                  : hasOtherSlots
+                                    ? "2px solid #fdba74"
                                 : "2px solid rgba(255,255,255,0.3)",
                               boxShadow: isCurrentlySelected
-                                ? "0 0 12px rgba(234, 179, 8, 0.5)"
+                                ? "0 0 12px rgba(37,99,235,0.55)"
+                                : hasOtherSlots
+                                  ? "0 0 10px rgba(251,146,60,0.3)"
                                 : "0 2px 6px rgba(0,0,0,0.2)",
                               transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
                             }}
                           >
                             <span className="leading-tight">{table.table_number}</span>
                             <span className="text-[7px] sm:text-[9px] opacity-80">{table.seats} pl.</span>
-                            {hasResa && (
+                            {hasConflict ? (
                               <span className="text-[7px] sm:text-[9px] opacity-90 leading-tight max-w-full truncate px-0.5">
-                                {getPickerSummary(table.id)}
+                                Conflit horaire
                               </span>
-                            )}
+                            ) : hasOtherSlots ? (
+                              <span className="text-[7px] sm:text-[9px] opacity-90 leading-tight max-w-full truncate px-0.5">
+                                {tableContext.otherSlotsLabel}
+                              </span>
+                            ) : null}
                           </button>
                         )
                       })}
@@ -1476,6 +1738,29 @@ export default function ReservationsPage() {
                 ))}
               </>
             )}
+          </div>
+
+          <div className="border-t border-slate-700 bg-slate-900 px-4 py-3 shrink-0">
+            <div className="flex flex-col sm:flex-row gap-2 sm:items-center sm:justify-between">
+              <div className="text-xs text-slate-300">
+                Sélection: {pickerSelectedIds.length} table{pickerSelectedIds.length > 1 ? "s" : ""} · {pickerSelectedSeats} places
+                {pickerCapacityMissing && (
+                  <span className="text-amber-400"> · capacité inférieure à {pickerTargetPartySize} personnes</span>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={closeTablePicker}
+                  className="bg-slate-800 hover:bg-slate-700 border-slate-600 text-slate-200"
+                >
+                  Annuler
+                </Button>
+                <Button onClick={confirmTablePickerSelection} className="bg-blue-600 hover:bg-blue-700">
+                  Valider la sélection
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       )}

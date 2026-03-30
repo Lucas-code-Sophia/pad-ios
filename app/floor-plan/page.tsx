@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, Reservation } from "@/lib/types"
 import { Button } from "@/components/ui/button"
@@ -32,9 +32,19 @@ import { sortTablesForDisplay } from "@/lib/table-sort"
 
 type TableVisualStatus = "available" | "occupied" | "occupied_to_follow" | "reserved"
 
+const toIsoDate = (date: Date) => {
+  const yyyy = date.getFullYear()
+  const mm = String(date.getMonth() + 1).padStart(2, "0")
+  const dd = String(date.getDate()).padStart(2, "0")
+  return `${yyyy}-${mm}-${dd}`
+}
+
+const isIsoDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
+
 export default function FloorPlanPage() {
   const { user, logout, isLoading } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const [tables, setTables] = useState<Table[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddTable, setShowAddTable] = useState(false)
@@ -58,6 +68,16 @@ export default function FloorPlanPage() {
   const [userAssignments, setUserAssignments] = useState<UserFloorPlanAssignments>({ assignments: {}, default_layout: "" })
   const tablesRequestRef = useRef<Promise<void> | null>(null)
   const reservationsRequestRef = useRef<Promise<void> | null>(null)
+
+  const reservationDateParam = String(searchParams.get("reservationDate") || "").trim()
+  const activeReservationDate = isIsoDate(reservationDateParam) ? reservationDateParam : toIsoDate(new Date())
+  const isReservationDateToday = activeReservationDate === toIsoDate(new Date())
+  const activeReservationDateLabel = new Date(`${activeReservationDate}T00:00:00`).toLocaleDateString("fr-FR", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  })
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -87,7 +107,7 @@ export default function FloorPlanPage() {
           customer_phone: reservationEdit.customer_phone,
           reservation_date: reservationEdit.reservation_date,
           reservation_time: reservationEdit.reservation_time,
-          duration_minutes: reservationEdit.duration_minutes ?? 120,
+          duration_minutes: reservationEdit.duration_minutes ?? 90,
           party_size: reservationEdit.party_size,
           notes: reservationEdit.notes,
         }),
@@ -135,7 +155,7 @@ export default function FloorPlanPage() {
       // Initial load: keep active-layout behavior stable, then load secondary layout metadata in background.
       const fetchInitialData = async () => {
         try {
-          await Promise.all([fetchTables(), fetchReservationsForToday(), fetchLayoutSetting(), fetchUserAssignments()])
+          await Promise.all([fetchTables(), fetchReservationsForDate(), fetchLayoutSetting(), fetchUserAssignments()])
         } catch (e) {
           console.error("[v0] Error during initial load:", e)
         } finally {
@@ -147,7 +167,7 @@ export default function FloorPlanPage() {
 
       // Refresh periodically
       const interval = setInterval(fetchTables, 5000)
-      const rInterval = setInterval(fetchReservationsForToday, 15000)
+      const rInterval = setInterval(fetchReservationsForDate, 15000)
       const layoutInterval = setInterval(fetchLayoutSetting, 30000)
       const layoutsInterval = setInterval(fetchLayouts, 60000)
       const visualInterval = setInterval(fetchVisualLayouts, 60000)
@@ -157,7 +177,7 @@ export default function FloorPlanPage() {
       const handleVisibilityChange = () => {
         if (!document.hidden) {
           fetchTables()
-          fetchReservationsForToday()
+          fetchReservationsForDate()
           fetchLayoutSetting()
           fetchLayouts()
           fetchVisualLayouts()
@@ -177,7 +197,7 @@ export default function FloorPlanPage() {
         document.removeEventListener('visibilitychange', handleVisibilityChange)
       }
     }
-  }, [user])
+  }, [user, activeReservationDate])
 
   // Run a one-time cleanup for past-day confirmed reservations to free tables
   useEffect(() => {
@@ -216,24 +236,27 @@ export default function FloorPlanPage() {
     return tablesRequestRef.current
   }
 
-  const fetchReservationsForToday = async () => {
+  const fetchReservationsForDate = async () => {
     if (reservationsRequestRef.current) return reservationsRequestRef.current
 
     reservationsRequestRef.current = (async () => {
       try {
-        const today = new Date()
-        const yyyy = today.getFullYear()
-        const mm = String(today.getMonth() + 1).padStart(2, "0")
-        const dd = String(today.getDate()).padStart(2, "0")
-        const dateStr = `${yyyy}-${mm}-${dd}`
-        const response = await fetch(`/api/reservations?date=${dateStr}`)
+        const response = await fetch(`/api/reservations?date=${activeReservationDate}`)
         if (response.ok) {
           const data: Reservation[] = await response.json()
           const map: Record<string, Reservation[]> = {}
           for (const r of data) {
             if (r.status !== "pending" && r.status !== "confirmed") continue
-            if (!map[r.table_id]) map[r.table_id] = []
-            map[r.table_id].push(r)
+            const linkedTableIds =
+              Array.isArray(r.table_ids) && r.table_ids.length > 0
+                ? r.table_ids
+                : r.table_id
+                  ? [r.table_id]
+                  : []
+            for (const tableId of linkedTableIds) {
+              if (!map[tableId]) map[tableId] = []
+              map[tableId].push(r)
+            }
           }
           for (const k of Object.keys(map)) {
             map[k].sort((a, b) => (a.reservation_time < b.reservation_time ? -1 : 1))
@@ -303,6 +326,10 @@ export default function FloorPlanPage() {
   }
 
   const getTableStatus = (table: Table): TableVisualStatus => {
+    if (!isReservationDateToday) {
+      return (reservationsByTable[table.id] || []).length > 0 ? "reserved" : "available"
+    }
+
     const status =
       table.status === "occupied"
         ? table.has_to_follow
@@ -316,6 +343,8 @@ export default function FloorPlanPage() {
 
   const handleTableClick = async (table: Table) => {
     const status = getTableStatus(table)
+    if (!isReservationDateToday && status === "available") return
+
     if (status === "available" || status === "occupied" || status === "occupied_to_follow") {
       router.push(`/order/${table.id}`)
     } else if (status === "reserved") {
@@ -325,12 +354,7 @@ export default function FloorPlanPage() {
       setShowReservationEditor(true)
       setReservationLoading(true)
       try {
-        const today = new Date()
-        const yyyy = today.getFullYear()
-        const mm = String(today.getMonth() + 1).padStart(2, "0")
-        const dd = String(today.getDate()).padStart(2, "0")
-        const dateStr = `${yyyy}-${mm}-${dd}`
-        const res = await fetch(`/api/reservations/by-table?tableId=${table.id}&date=${dateStr}`)
+        const res = await fetch(`/api/reservations/by-table?tableId=${table.id}&date=${activeReservationDate}`)
         if (res.ok) {
           const data = await res.json()
           setReservationsForDay(Array.isArray(data) ? data : [])
@@ -356,6 +380,7 @@ export default function FloorPlanPage() {
   }
 
   const handleAccessReservedTable = () => {
+    if (!isReservationDateToday) return
     const targetTableId = reservationTableId || reservationEdit?.table_id
     if (!targetTableId) return
     setShowReservationEditor(false)
@@ -413,13 +438,13 @@ export default function FloorPlanPage() {
               Voir et modifier la réservation confirmée associée à cette table
             </DialogDescription>
           </DialogHeader>
-          {/* List of today's reservations for this table */}
+          {/* List of reservations for selected date for this table */}
           {!reservationLoading && (
             <div className="mb-3">
-              <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">Réservations du jour</div>
+              <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">Réservations du {activeReservationDateLabel}</div>
               <div className="max-h-80 overflow-y-auto space-y-1">
               {reservationsForDay.length === 0 ? (
-                <div className="text-slate-400 text-sm text-center py-2">Aucune réservation aujourd'hui pour cette table.</div>
+                <div className="text-slate-400 text-sm text-center py-2">Aucune réservation pour cette date sur cette table.</div>
               ) : (
                 reservationsForDay.map((r) => (
                   <button
@@ -488,7 +513,7 @@ export default function FloorPlanPage() {
                   type="number"
                   min="15"
                   step="5"
-                  value={reservationEdit.duration_minutes ?? 120}
+                  value={reservationEdit.duration_minutes ?? 90}
                   onChange={(e) => handleReservationField("duration_minutes" as any, Number.parseInt(e.target.value || "0"))}
                   className="bg-slate-700 border-slate-600 text-sm"
                 />
@@ -530,12 +555,14 @@ export default function FloorPlanPage() {
                   No-show
                 </Button>
               </div>
-              <Button
-                onClick={handleAccessReservedTable}
-                className="w-full bg-orange-600 hover:bg-orange-700 text-xs sm:text-sm"
-              >
-                Accéder à la table malgré la/les réservations
-              </Button>
+              {isReservationDateToday && (
+                <Button
+                  onClick={handleAccessReservedTable}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-xs sm:text-sm"
+                >
+                  Accéder à la table malgré la/les réservations
+                </Button>
+              )}
             </div>
           )}
         </DialogContent>
@@ -597,6 +624,19 @@ export default function FloorPlanPage() {
   const myTables = sortTablesByNumber(
     tables.filter((t) => t.opened_by === user?.id && t.status === "occupied")
   )
+
+  const tableVisualStatuses = tables.map((table) => ({ table, status: getTableStatus(table) }))
+  const freeTablesCount = tableVisualStatuses.filter((entry) => entry.status === "available").length
+  const occupiedTablesCount = tableVisualStatuses.filter(
+    (entry) => entry.status === "occupied" || entry.status === "occupied_to_follow",
+  ).length
+  const reservedTablesCount = tableVisualStatuses.filter((entry) => entry.status === "reserved").length
+  const servedCoversCount = tables.reduce((sum, table) => sum + (table.status === "occupied" ? table.seats : 0), 0)
+  const reservationCountForDate = new Set(
+    Object.values(reservationsByTable)
+      .flat()
+      .map((reservation) => reservation.id),
+  ).size
 
   // Fonction pour afficher le nom du serveur qui a ouvert la table
   const getServerName = (table: Table) => {
@@ -685,15 +725,15 @@ export default function FloorPlanPage() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div>
           <h2 className="text-lg sm:text-xl font-bold text-[#081E3E] mb-2 sm:mb-3">Canapé</h2>
-          <div className="grid grid-cols-2 gap-2 sm:gap-3">
+          <div className="grid grid-cols-4 sm:grid-cols-4 gap-2 sm:gap-3">
             {canapeeTables.map((table) => (
-              <TableButton key={table.id} table={table} aspectRatio={false} />
+              <TableButton key={table.id} table={table} />
             ))}
           </div>
         </div>
         <div>
           <h2 className="text-lg sm:text-xl font-bold text-[#081E3E] mb-2 sm:mb-3 sm:invisible">Terrasse (suite)</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+          <div className="grid grid-cols-4 sm:grid-cols-4 gap-2 sm:gap-3">
             {terraceTablesMiddle.map((table) => (
               <TableButton key={table.id} table={table} />
             ))}
@@ -711,9 +751,9 @@ export default function FloorPlanPage() {
       {tableHoteTables.length > 0 && (
         <div>
           <h2 className="text-lg sm:text-xl font-bold text-[#081E3E] mb-2 sm:mb-3">Table d&apos;Hôte</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
+          <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 sm:gap-3">
             {tableHoteTables.map((table) => (
-              <TableButton key={table.id} table={table} aspectRatio={false} />
+              <TableButton key={table.id} table={table} />
             ))}
           </div>
         </div>
@@ -1007,6 +1047,16 @@ export default function FloorPlanPage() {
             <Calendar className="h-3 w-3 sm:h-4 sm:w-4 sm:mr-2" />
             <span className="hidden sm:inline">Réservations</span>
           </Button>
+          {!isReservationDateToday && (
+            <Button
+              onClick={() => router.push("/floor-plan")}
+              size="sm"
+              className="bg-emerald-600 hover:bg-emerald-700 whitespace-nowrap text-xs sm:text-sm"
+            >
+              <Calendar className="h-3 w-3 sm:h-4 sm:w-4 sm:mr-2" />
+              <span className="hidden sm:inline">Vue Aujourd&apos;hui</span>
+            </Button>
+          )}
           {user?.role === "manager" && (
             <Button
               onClick={() => router.push("/history")}
@@ -1158,7 +1208,16 @@ export default function FloorPlanPage() {
       {/* Title */}
       <div className="mb-4 sm:mb-6">
         <h1 className="text-xl sm:text-3xl font-bold text-[#081E3E] mb-1 sm:mb-2">Plan de salle</h1>
-        <p className="text-xs sm:text-base text-slate-600">Sélectionnez une table pour prendre une commande</p>
+        <p className="text-xs sm:text-base text-slate-600">
+          {isReservationDateToday
+            ? "Sélectionnez une table pour prendre une commande"
+            : `Vue réservations du ${activeReservationDateLabel}`}
+        </p>
+        {!isReservationDateToday && (
+          <p className="text-[11px] sm:text-sm text-slate-500 mt-1">
+            Mode consultation: horaires et réservations par table pour la date sélectionnée.
+          </p>
+        )}
       </div>
 
       {/* Legend */}
@@ -1189,7 +1248,7 @@ export default function FloorPlanPage() {
         <Card className="bg-slate-800 border-slate-700 p-3 sm:p-4">
           <div className="text-center">
             <div className="text-2xl sm:text-3xl font-bold text-green-500">
-              {tables.filter((t) => t.status === "available").length}
+              {freeTablesCount}
             </div>
             <div className="text-xs sm:text-sm text-slate-400 mt-1">Tables libres</div>
           </div>
@@ -1197,17 +1256,21 @@ export default function FloorPlanPage() {
         <Card className="bg-slate-800 border-slate-700 p-3 sm:p-4">
           <div className="text-center">
             <div className="text-2xl sm:text-3xl font-bold text-red-500">
-              {tables.filter((t) => t.status === "occupied").length}
+              {isReservationDateToday ? occupiedTablesCount : reservedTablesCount}
             </div>
-            <div className="text-xs sm:text-sm text-slate-400 mt-1">Tables occupées</div>
+            <div className="text-xs sm:text-sm text-slate-400 mt-1">
+              {isReservationDateToday ? "Tables occupées" : "Tables réservées"}
+            </div>
           </div>
         </Card>
         <Card className="bg-slate-800 border-slate-700 p-3 sm:p-4">
           <div className="text-center">
             <div className="text-2xl sm:text-3xl font-bold text-blue-500">
-              {tables.reduce((sum, t) => sum + (t.status === "occupied" ? t.seats : 0), 0)}
+              {isReservationDateToday ? servedCoversCount : reservationCountForDate}
             </div>
-            <div className="text-xs sm:text-sm text-slate-400 mt-1">Couverts servis</div>
+            <div className="text-xs sm:text-sm text-slate-400 mt-1">
+              {isReservationDateToday ? "Couverts servis" : "Réservations"}
+            </div>
           </div>
         </Card>
       </div>
@@ -1302,12 +1365,14 @@ export default function FloorPlanPage() {
                   No-show
                 </Button>
               </div>
-              <Button
-                onClick={handleAccessReservedTable}
-                className="w-full bg-orange-600 hover:bg-orange-700 text-xs sm:text-sm"
-              >
-                Accéder à la table malgré la/les réservations
-              </Button>
+              {isReservationDateToday && (
+                <Button
+                  onClick={handleAccessReservedTable}
+                  className="w-full bg-orange-600 hover:bg-orange-700 text-xs sm:text-sm"
+                >
+                  Accéder à la table malgré la/les réservations
+                </Button>
+              )}
             </div>
           )}
         </DialogContent>

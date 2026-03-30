@@ -45,6 +45,9 @@ export interface Table {
 export interface Reservation {
   id: string
   table_id: string
+  table_ids?: string[]
+  table_numbers?: string[]
+  total_seats?: number
   customer_name: string
   customer_phone?: string
   reservation_date: string

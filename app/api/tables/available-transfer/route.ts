@@ -7,6 +7,16 @@ const toMinutes = (t: string) => {
 }
 
 const formatDate = (d: Date) => d.toISOString().split("T")[0]
+const dedupeIds = (values: string[]) => Array.from(new Set(values.filter(Boolean)))
+const isMissingReservationTablesError = (error: any) => {
+  const message = String(error?.message || "").toLowerCase()
+  const details = String(error?.details || "").toLowerCase()
+  const code = String(error?.code || "").toLowerCase()
+  return (
+    (message.includes("reservation_tables") || details.includes("reservation_tables")) &&
+    (message.includes("does not exist") || details.includes("does not exist") || code === "42p01")
+  )
+}
 
 export async function GET(request: Request) {
   try {
@@ -42,8 +52,7 @@ export async function GET(request: Request) {
 
     const { data: reservations, error: resError } = await supabase
       .from("reservations")
-      .select("table_id, reservation_date, reservation_time, status")
-      .in("table_id", tableIds)
+      .select("id, table_id, reservation_date, reservation_time, status")
       .in("status", ["pending", "confirmed"])
       .in("reservation_date", endMinutes > 1440 ? [today, tomorrow] : [today])
 
@@ -52,18 +61,55 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Failed to fetch reservations" }, { status: 500 })
     }
 
+    const reservationIds = (reservations || []).map((reservation: any) => String(reservation.id || "")).filter(Boolean)
+    let linksMap = new Map<string, string[]>()
+    if (reservationIds.length > 0) {
+      const { data: linksData, error: linksError } = await supabase
+        .from("reservation_tables")
+        .select("reservation_id, table_id")
+        .in("reservation_id", reservationIds)
+
+      if (linksError && !isMissingReservationTablesError(linksError)) {
+        console.error("[v0] Error fetching reservation links:", linksError)
+        return NextResponse.json({ error: "Failed to fetch reservation links" }, { status: 500 })
+      }
+
+      if (!linksError) {
+        for (const link of linksData || []) {
+          const reservationId = String(link.reservation_id || "")
+          const linkTableId = String(link.table_id || "")
+          if (!reservationId || !linkTableId) continue
+          if (!linksMap.has(reservationId)) linksMap.set(reservationId, [])
+          linksMap.get(reservationId)!.push(linkTableId)
+        }
+      }
+    }
+
     const blocked = new Set<string>()
     for (const r of reservations || []) {
       const minutes = toMinutes(r.reservation_time)
+      const reservationTableIds = dedupeIds([
+        String(r.table_id || ""),
+        ...(linksMap.get(String(r.id || "")) || []),
+      ]).filter((tableId) => tableIds.includes(tableId))
+
+      if (reservationTableIds.length === 0) continue
+
+      const blockTableIds = () => {
+        for (const reservationTableId of reservationTableIds) {
+          blocked.add(reservationTableId)
+        }
+      }
+
       if (r.reservation_date === today) {
         if (endMinutes <= 1440) {
-          if (minutes >= nowMinutes && minutes <= endMinutes) blocked.add(r.table_id)
+          if (minutes >= nowMinutes && minutes <= endMinutes) blockTableIds()
         } else {
-          if (minutes >= nowMinutes) blocked.add(r.table_id)
+          if (minutes >= nowMinutes) blockTableIds()
         }
       } else if (r.reservation_date === tomorrow && endMinutes > 1440) {
         const nextDayEnd = endMinutes - 1440
-        if (minutes <= nextDayEnd) blocked.add(r.table_id)
+        if (minutes <= nextDayEnd) blockTableIds()
       }
     }
 
