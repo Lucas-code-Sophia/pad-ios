@@ -70,6 +70,7 @@ export default function FloorPlanPage() {
   const reservationsRequestRef = useRef<Promise<void> | null>(null)
 
   const reservationDateParam = String(searchParams.get("reservationDate") || "").trim()
+  const reservationPlanMode = searchParams.get("reservationPlan") === "1"
   const activeReservationDate = isIsoDate(reservationDateParam) ? reservationDateParam : toIsoDate(new Date())
   const isReservationDateToday = activeReservationDate === toIsoDate(new Date())
   const activeReservationDateLabel = new Date(`${activeReservationDate}T00:00:00`).toLocaleDateString("fr-FR", {
@@ -974,6 +975,13 @@ export default function FloorPlanPage() {
   // ─── Resolve which layout to use for current user ───
 
   const resolveUserLayout = (): { type: "visual"; layout: VisualFloorPlan } | { type: "grid" } => {
+    if (reservationPlanMode) {
+      const forcedLayout =
+        visualLayouts.find((layout) => layout.label.trim().toLowerCase() === "restaurant - vue réelle") ||
+        visualLayouts.find((layout) => layout.label.trim().toLowerCase().includes("vue réelle"))
+      if (forcedLayout) return { type: "visual", layout: forcedLayout }
+    }
+
     if (!user) return { type: "grid" }
 
     // Check user-specific assignment first

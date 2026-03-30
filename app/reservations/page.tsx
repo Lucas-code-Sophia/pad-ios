@@ -804,7 +804,11 @@ export default function ReservationsPage() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => router.push(`/floor-plan?reservationDate=${encodeURIComponent(selectedDate)}`)}
+            onClick={() =>
+              router.push(
+                `/floor-plan?reservationDate=${encodeURIComponent(selectedDate)}&reservationPlan=1`,
+              )
+            }
             className="bg-cyan-700/30 border-cyan-600 text-cyan-200 hover:bg-cyan-700/50"
           >
             <MapPin className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
