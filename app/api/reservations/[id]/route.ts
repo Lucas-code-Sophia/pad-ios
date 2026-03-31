@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
 
-const DEFAULT_RESERVATION_DURATION_MINUTES = 90
+const DEFAULT_RESERVATION_DURATION_MINUTES = 120
 const ACTIVE_RESERVATION_STATUSES = ["pending", "confirmed", "seated"] as const
 
 const normalizeDurationMinutes = (value: unknown) => {

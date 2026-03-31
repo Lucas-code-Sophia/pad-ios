@@ -6,6 +6,15 @@ import { useAuth } from "@/lib/auth-context"
 import type { Table, Order, OrderItem, MenuItem, PaymentItem, Supplement } from "@/lib/types"
 import { printTicketWithConfiguredMode } from "@/lib/print-client"
 import type { EposTicket } from "@/lib/epos"
+import {
+  buildReceiptPrintLines,
+  buildReceiptTicketHtml,
+  buildTicketPaymentRows,
+  formatTicketDateTime,
+  type TicketItemRow,
+  type TicketPrintLine,
+  type TicketTaxRow,
+} from "@/lib/ticket-layout"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -548,54 +557,7 @@ export default function BillPage() {
     }
   }
 
-  const escapeHtml = (value: string | undefined | null) =>
-    (value || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;")
-
-  const formatTicketAmount = (value: number) =>
-    Number(value || 0).toLocaleString("fr-FR", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-
-  const formatTicketDateTime = (value: string | Date) => {
-    const date = value instanceof Date ? value : new Date(value)
-    if (Number.isNaN(date.getTime())) return new Date().toLocaleString("fr-FR")
-    return date.toLocaleString("fr-FR", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    })
-  }
-
-  type ReceiptPrintLine = {
-    content: string
-    align?: "left" | "center" | "right"
-    font?: "font_a" | "font_b"
-    fontScale?: number
-  }
-
-  type TicketLineItem = {
-    label: string
-    amount: number
-    complimentary?: boolean
-    note?: string
-    followLabelHtml?: string
-    followLabelText?: string
-  }
-
-  type TaxRow = {
-    rate: 10 | 20
-    ht: number
-    tva: number
-    ttc: number
-  }
+  type ReceiptPrintLine = TicketPrintLine
 
   const getTicketContext = () => {
     const coversCount = Math.max(1, Number(order?.covers ?? table?.current_covers ?? 1) || 1)
@@ -607,14 +569,14 @@ export default function BillPage() {
   }
 
   const getToFollowLabel = (status?: OrderItem["status"]) => {
-    if (status === "to_follow_1") return { html: "À SUIVRE 1", text: "A SUIVRE 1" }
-    if (status === "to_follow_2") return { html: "À SUIVRE 2", text: "A SUIVRE 2" }
-    return null
+    if (status === "to_follow_1") return "A SUIVRE 1"
+    if (status === "to_follow_2") return "A SUIVRE 2"
+    return ""
   }
 
-  const getBillLineItems = (): TicketLineItem[] => {
+  const getBillLineItems = (): TicketItemRow[] => {
     const itemLines = items.map((item) => ({
-      ...(getToFollowLabel(item.status) || {}),
+      flag: getToFollowLabel(item.status),
       label: `${item.quantity} ${item.menu_item?.name || "Article"}`,
       amount: item.is_complimentary ? 0 : Number(item.price || 0) * Number(item.quantity || 0),
       complimentary: item.is_complimentary,
@@ -631,12 +593,12 @@ export default function BillPage() {
     return [...itemLines, ...supplementLines]
   }
 
-  const getMealLineItems = (): TicketLineItem[] => {
+  const getMealLineItems = (): TicketItemRow[] => {
     const total = Math.max(0, Number.parseFloat(mealTicketTotal) || 0)
     return [{ label: `${mealTicketMealsCountValue} Ticket repas`, amount: total }]
   }
 
-  const getBillTaxRows = (): TaxRow[] => {
+  const getBillTaxRows = (): TicketTaxRow[] => {
     const byRate: Record<10 | 20, number> = { 10: 0, 20: 0 }
 
     for (const item of items) {
@@ -661,7 +623,7 @@ export default function BillPage() {
     })
   }
 
-  const getMealTaxRows = (): TaxRow[] => {
+  const getMealTaxRows = (): TicketTaxRow[] => {
     const total = Math.max(0, Number.parseFloat(mealTicketTotal) || 0)
     if (!mealTicketIncludeTax) {
       return [
@@ -718,189 +680,6 @@ export default function BillPage() {
     )
   }
 
-  const buildTicketHtml = (title: string, body: string) => `
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>${escapeHtml(title)}</title>
-        <style>
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #fff; }
-          body {
-            font-family: "Helvetica Neue", Arial, sans-serif;
-            color: #2f2f2f;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          #ticket-root {
-            width: 78mm;
-            margin: 0 auto;
-            padding: 6mm 4.5mm 7mm;
-            font-size: 16px;
-            line-height: 1.18;
-          }
-          .head-center { text-align: center; }
-          .head-title { font-size: 42px; font-weight: 500; line-height: 1; }
-          .head-line { font-size: 42px; font-weight: 500; line-height: 1; text-transform: uppercase; }
-          .specimen { font-size: 44px; font-weight: 700; margin-top: 2mm; }
-          .meta-date { margin-top: 7mm; font-size: 48px; font-weight: 700; line-height: 1.05; }
-          .meta-service { font-size: 50px; font-weight: 700; line-height: 1.05; margin-top: 1.2mm; }
-          .meta-table { font-size: 40px; font-weight: 600; line-height: 1.1; margin-top: 0.8mm; }
-          .price-label { font-size: 46px; margin-top: 2mm; margin-bottom: 3mm; }
-          .item-row {
-            display: grid;
-            grid-template-columns: 1fr auto auto;
-            column-gap: 4mm;
-            align-items: baseline;
-            margin: 0.8mm 0;
-            font-size: 49px;
-          }
-          .item-name { min-width: 0; word-break: break-word; }
-          .item-flag { min-width: 20mm; text-align: center; font-size: 46px; font-weight: 500; color: #3f3f3f; }
-          .item-price { min-width: 18mm; text-align: right; font-variant-numeric: tabular-nums; }
-          .item-note {
-            margin: 0.4mm 0 0.8mm 2mm;
-            font-size: 40px;
-            color: #444;
-          }
-          .summary-note {
-            margin-top: 4.5mm;
-            margin-bottom: 1.4mm;
-            font-size: 44px;
-          }
-          .sum-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            font-size: 50px;
-            margin: 0.8mm 0;
-            gap: 6mm;
-          }
-          .sum-row .sum-right { font-variant-numeric: tabular-nums; }
-          .sum-row.muted { font-size: 46px; color: #3b3b3b; }
-          .sum-row.due {
-            font-size: 62px;
-            font-weight: 700;
-            margin-top: 1.8mm;
-          }
-          .dash {
-            margin: 3.4mm auto;
-            text-align: center;
-            font-size: 40px;
-            letter-spacing: 0;
-            color: #5a5a5a;
-          }
-          .tax-head,
-          .tax-row {
-            display: grid;
-            grid-template-columns: 1.1fr 1fr 1fr 1fr;
-            column-gap: 2.5mm;
-            align-items: baseline;
-            font-variant-numeric: tabular-nums;
-          }
-          .tax-head {
-            font-size: 48px;
-            margin-bottom: 0.7mm;
-          }
-          .tax-row {
-            font-size: 46px;
-            margin: 0.6mm 0;
-          }
-          .tax-head span:not(:first-child),
-          .tax-row span:not(:first-child) { text-align: right; }
-          .payment-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            font-size: 50px;
-            margin: 0.8mm 0;
-            font-variant-numeric: tabular-nums;
-            gap: 6mm;
-          }
-          .ticket-ref {
-            margin-top: 2.6mm;
-            font-size: 34px;
-            color: #4f4f4f;
-          }
-          .printed-at {
-            text-align: right;
-            margin-top: 2.2mm;
-            font-size: 34px;
-            color: #4f4f4f;
-          }
-          .final-dash {
-            margin-top: 5mm;
-            text-align: center;
-            font-size: 40px;
-            color: #5a5a5a;
-          }
-          @media print {
-            #ticket-root { width: auto; padding: 4mm 2.5mm 5mm; }
-          }
-        </style>
-      </head>
-      <body><div id="ticket-root">${body}</div></body>
-    </html>
-  `
-
-  const getTicketHeaderHtml = () => `
-    <div class="head-center head-title">Sophia</div>
-    <div class="head-center head-line">67 BOULEVARD DE LA PLAGE</div>
-    <div class="head-center head-line">33970 LEGE-CAP-FERRET</div>
-    <div class="head-center head-line">+33615578419</div>
-    <div class="head-center head-line">SARL LILY</div>
-    <div class="head-center head-line">SIRET : 94077148800027</div>
-    <div class="head-center specimen">*** SPECIMEN ***</div>
-  `
-
-  const buildItemRowsHtml = (rows: TicketLineItem[]) =>
-    rows
-      .map(
-        (row) => {
-          const rowFlag = [row.followLabelHtml, row.complimentary ? "OFFERT" : ""].filter(Boolean).join(" • ")
-          return `
-          <div class="item-row ${row.complimentary ? "is-complimentary" : ""}">
-            <span class="item-name">${escapeHtml(row.label)}</span>
-            <span class="item-flag">${escapeHtml(rowFlag)}</span>
-            <span class="item-price">${formatTicketAmount(row.amount)}</span>
-          </div>
-          ${row.note ? `<div class="item-note">+ ${escapeHtml(row.note)}</div>` : ""}
-        `
-        },
-      )
-      .join("")
-
-  const buildTaxRowsHtml = (rows: TaxRow[]) =>
-    rows
-      .map(
-        (row) => `
-          <div class="tax-row">
-            <span>${formatTicketAmount(row.rate)} %</span>
-            <span>${formatTicketAmount(row.ht)}</span>
-            <span>${formatTicketAmount(row.tva)}</span>
-            <span>${formatTicketAmount(row.ttc)}</span>
-          </div>
-        `,
-      )
-      .join("")
-
-  const buildPaymentRowsHtml = (breakdown: { cb: number; cash: number; tr: number }, renderedChange: number) => {
-    const rows: string[] = []
-    if (breakdown.cb > 0) {
-      rows.push(`<div class="payment-row"><span>CB</span><span>${formatTicketAmount(breakdown.cb)}</span></div>`)
-    }
-    if (breakdown.cash > 0) {
-      rows.push(`<div class="payment-row"><span>Cash</span><span>${formatTicketAmount(breakdown.cash)}</span></div>`)
-    }
-    if (renderedChange > 0) {
-      rows.push(`<div class="payment-row"><span>Rendu</span><span>${formatTicketAmount(renderedChange)}</span></div>`)
-    }
-    if (breakdown.tr > 0) {
-      rows.push(`<div class="payment-row"><span>TR</span><span>${formatTicketAmount(breakdown.tr)}</span></div>`)
-    }
-    return rows.join("")
-  }
-
   const buildBillTicketHtml = () => {
     const context = getTicketContext()
     const total = calculateTotal()
@@ -912,33 +691,30 @@ export default function BillPage() {
     const billRows = getBillLineItems()
     const billTaxRows = getBillTaxRows()
     const renderedChange = Math.max(0, paymentMethod === "cash" ? changeDue : 0)
+    const paymentRows = buildTicketPaymentRows({
+      cb: paymentBreakdown.cb,
+      cash: paymentBreakdown.cash,
+      tr: paymentBreakdown.tr,
+      renderedChange,
+    })
     const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
-    const body = `
-      ${getTicketHeaderHtml()}
-      <div class="meta-date">${escapeHtml(context.nowLabel)}</div>
-      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
-      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
-      <div class="price-label">Prix en €</div>
-      ${buildItemRowsHtml(billRows)}
-      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
-      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
-      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(discountsIncluded)}</span></div>
-      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
-      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
-      <div class="dash">---------------------------------------------------</div>
-      <div class="tax-head">
-        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
-      </div>
-      ${buildTaxRowsHtml(billTaxRows)}
-      <div class="dash">---------------------------------------------------</div>
-      ${buildPaymentRowsHtml(paymentBreakdown, renderedChange)}
-      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
-      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
-      <div class="final-dash">-------------------------------</div>
-    `
-
-    return buildTicketHtml(`Addition - Table ${context.tableNumber}`, body)
+    return buildReceiptTicketHtml({
+      documentTitle: `Addition - Table ${context.tableNumber}`,
+      metaDate: context.nowLabel,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: billRows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows: billTaxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
   }
 
   const buildMealTicketHtml = () => {
@@ -951,67 +727,31 @@ export default function BillPage() {
     const mealRows = getMealLineItems()
     const mealTaxRows = getMealTaxRows()
     const renderedChange = Math.max(0, paymentMethod === "cash" ? changeDue : 0)
+    const paymentRows = buildTicketPaymentRows({
+      cb: paymentBreakdown.cb,
+      cash: paymentBreakdown.cash,
+      tr: paymentBreakdown.tr,
+      renderedChange,
+    })
     const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
-    const body = `
-      ${getTicketHeaderHtml()}
-      <div class="meta-date">${escapeHtml(context.nowLabel)}</div>
-      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
-      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
-      <div class="price-label">Prix en €</div>
-      ${buildItemRowsHtml(mealRows)}
-      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
-      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
-      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(0)}</span></div>
-      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
-      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
-      <div class="dash">---------------------------------------------------</div>
-      <div class="tax-head">
-        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
-      </div>
-      ${buildTaxRowsHtml(mealTaxRows)}
-      <div class="dash">---------------------------------------------------</div>
-      ${buildPaymentRowsHtml(paymentBreakdown, renderedChange)}
-      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
-      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
-      <div class="final-dash">-------------------------------</div>
-    `
-
-    return buildTicketHtml(`Ticket repas - Table ${context.tableNumber}`, body)
+    return buildReceiptTicketHtml({
+      documentTitle: `Ticket repas - Table ${context.tableNumber}`,
+      metaDate: context.nowLabel,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: mealRows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded: 0,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows: mealTaxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
   }
-
-  const TICKET_TEXT_WIDTH = 48
-  const separatorLine = "-".repeat(TICKET_TEXT_WIDTH)
-  const shortSeparatorLine = "-".repeat(31)
-
-  const formatTicketTextRow = (left: string, right: string, width = TICKET_TEXT_WIDTH) => {
-    const safeLeft = (left || "").trim()
-    const safeRight = (right || "").trim()
-    const minSpacing = 1
-    const maxLeftLength = Math.max(0, width - safeRight.length - minSpacing)
-    const trimmedLeft = safeLeft.length > maxLeftLength ? `${safeLeft.slice(0, Math.max(0, maxLeftLength - 3))}...` : safeLeft
-    const spaces = Math.max(minSpacing, width - trimmedLeft.length - safeRight.length)
-    return `${trimmedLeft}${" ".repeat(spaces)}${safeRight}`
-  }
-
-  const formatTicketTextThreeCols = (left: string, middle: string, right: string, width = TICKET_TEXT_WIDTH) => {
-    const safeMiddle = (middle || "").trim()
-    const safeRight = (right || "").trim()
-    const minGap = 1
-    const maxLeftLength = Math.max(0, width - safeMiddle.length - safeRight.length - minGap * 2)
-    const safeLeft = (left || "").trim()
-    const trimmedLeft = safeLeft.length > maxLeftLength ? `${safeLeft.slice(0, Math.max(0, maxLeftLength - 3))}...` : safeLeft
-    const middleAndRight = `${safeMiddle}${" ".repeat(minGap)}${safeRight}`
-    const spaces = Math.max(minGap, width - trimmedLeft.length - middleAndRight.length)
-    return `${trimmedLeft}${" ".repeat(spaces)}${middleAndRight}`
-  }
-
-  const formatTaxTextHeader = () => `${"Taux".padEnd(8)}${"HT".padStart(12)}${"TVA".padStart(12)}${"TTC".padStart(12)}`
-
-  const formatTaxTextRow = (row: TaxRow) =>
-    `${`${formatTicketAmount(row.rate)} %`.padEnd(8)}${formatTicketAmount(row.ht).padStart(12)}${formatTicketAmount(
-      row.tva,
-    ).padStart(12)}${formatTicketAmount(row.ttc).padStart(12)}`
 
   const buildBillTicketPrintLines = (): ReceiptPrintLine[] => {
     const context = getTicketContext()
@@ -1024,63 +764,30 @@ export default function BillPage() {
     const billRows = getBillLineItems()
     const billTaxRows = getBillTaxRows()
     const renderedChange = Math.max(0, paymentMethod === "cash" ? changeDue : 0)
+    const paymentRows = buildTicketPaymentRows({
+      cb: paymentBreakdown.cb,
+      cash: paymentBreakdown.cash,
+      tr: paymentBreakdown.tr,
+      renderedChange,
+    })
     const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
-    const lines: ReceiptPrintLine[] = [
-      { content: "Sophia", align: "center", font: "font_a", fontScale: 1.2 },
-      { content: "67 BOULEVARD DE LA PLAGE", align: "center", font: "font_a" },
-      { content: "33970 LEGE-CAP-FERRET", align: "center", font: "font_a" },
-      { content: "+33615578419", align: "center", font: "font_a" },
-      { content: "SARL LILY", align: "center", font: "font_a" },
-      { content: "SIRET : 94077148800027", align: "center", font: "font_a" },
-      { content: "*** SPECIMEN ***", align: "center", font: "font_a", fontScale: 1.2 },
-      { content: "" },
-      { content: context.nowLabel, font: "font_a", fontScale: 1.2 },
-      { content: context.serviceLine, font: "font_a", fontScale: 1.2 },
-      { content: `Table ${context.tableNumber}` },
-      { content: "Prix en €" },
-      { content: "" },
-    ]
-
-    for (const row of billRows) {
-      const amountLabel = formatTicketAmount(row.amount)
-      const rowFlag = [row.followLabelText, row.complimentary ? "OFFERT" : ""].filter(Boolean).join(" ")
-      if (rowFlag) {
-        lines.push({ content: formatTicketTextThreeCols(row.label, rowFlag, amountLabel) })
-      } else {
-        lines.push({ content: formatTicketTextRow(row.label, amountLabel) })
-      }
-      if (row.note) {
-        lines.push({ content: `+ ${row.note}` })
-      }
-    }
-
-    lines.push({ content: "" })
-    lines.push({ content: `(Total restant par personne : ${formatTicketAmount(perPerson)})` })
-    lines.push({ content: formatTicketTextRow("Total TTC", formatTicketAmount(total)) })
-    lines.push({ content: formatTicketTextRow("(remises et offres inclus)", formatTicketAmount(discountsIncluded)) })
-    lines.push({ content: formatTicketTextRow("Deja encaisse", `-${formatTicketAmount(alreadyPaid)}`) })
-    lines.push({
-      content: formatTicketTextRow("Total TTC Du", formatTicketAmount(remaining)),
-      font: "font_a",
-      fontScale: 1.5,
+    return buildReceiptPrintLines({
+      documentTitle: `Addition - Table ${context.tableNumber}`,
+      metaDate: context.nowLabel,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: billRows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows: billTaxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
     })
-    lines.push({ content: separatorLine, align: "center" })
-    lines.push({ content: formatTaxTextHeader() })
-    for (const row of billTaxRows) {
-      lines.push({ content: formatTaxTextRow(row) })
-    }
-    lines.push({ content: separatorLine, align: "center" })
-    if (paymentBreakdown.cb > 0) lines.push({ content: formatTicketTextRow("CB", formatTicketAmount(paymentBreakdown.cb)) })
-    if (paymentBreakdown.cash > 0) lines.push({ content: formatTicketTextRow("Cash", formatTicketAmount(paymentBreakdown.cash)) })
-    if (renderedChange > 0) lines.push({ content: formatTicketTextRow("Rendu", formatTicketAmount(renderedChange)) })
-    if (paymentBreakdown.tr > 0) lines.push({ content: formatTicketTextRow("TR", formatTicketAmount(paymentBreakdown.tr)) })
-    lines.push({ content: ticketRef })
-    lines.push({ content: `Imprime le ${context.nowLabel}`, align: "right" })
-    lines.push({ content: "" })
-    lines.push({ content: shortSeparatorLine, align: "center" })
-
-    return lines
   }
 
   const buildMealTicketPrintLines = (): ReceiptPrintLine[] => {
@@ -1093,54 +800,30 @@ export default function BillPage() {
     const mealRows = getMealLineItems()
     const mealTaxRows = getMealTaxRows()
     const renderedChange = Math.max(0, paymentMethod === "cash" ? changeDue : 0)
+    const paymentRows = buildTicketPaymentRows({
+      cb: paymentBreakdown.cb,
+      cash: paymentBreakdown.cash,
+      tr: paymentBreakdown.tr,
+      renderedChange,
+    })
     const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
 
-    const lines: ReceiptPrintLine[] = [
-      { content: "Sophia", align: "center", font: "font_a", fontScale: 1.2 },
-      { content: "67 BOULEVARD DE LA PLAGE", align: "center", font: "font_a" },
-      { content: "33970 LEGE-CAP-FERRET", align: "center", font: "font_a" },
-      { content: "+33615578419", align: "center", font: "font_a" },
-      { content: "SARL LILY", align: "center", font: "font_a" },
-      { content: "SIRET : 94077148800027", align: "center", font: "font_a" },
-      { content: "*** SPECIMEN ***", align: "center", font: "font_a", fontScale: 1.2 },
-      { content: "" },
-      { content: context.nowLabel, font: "font_a", fontScale: 1.2 },
-      { content: context.serviceLine, font: "font_a", fontScale: 1.2 },
-      { content: `Table ${context.tableNumber}` },
-      { content: "Prix en €" },
-      { content: "" },
-    ]
-
-    for (const row of mealRows) {
-      lines.push({ content: formatTicketTextRow(row.label, formatTicketAmount(row.amount)) })
-    }
-
-    lines.push({ content: "" })
-    lines.push({ content: `(Total restant par personne : ${formatTicketAmount(perPerson)})` })
-    lines.push({ content: formatTicketTextRow("Total TTC", formatTicketAmount(total)) })
-    lines.push({ content: formatTicketTextRow("(remises et offres inclus)", formatTicketAmount(0)) })
-    lines.push({ content: formatTicketTextRow("Deja encaisse", `-${formatTicketAmount(alreadyPaid)}`) })
-    lines.push({
-      content: formatTicketTextRow("Total TTC Du", formatTicketAmount(remaining)),
-      font: "font_a",
-      fontScale: 1.5,
+    return buildReceiptPrintLines({
+      documentTitle: `Ticket repas - Table ${context.tableNumber}`,
+      metaDate: context.nowLabel,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: mealRows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded: 0,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows: mealTaxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
     })
-    lines.push({ content: separatorLine, align: "center" })
-    lines.push({ content: formatTaxTextHeader() })
-    for (const row of mealTaxRows) {
-      lines.push({ content: formatTaxTextRow(row) })
-    }
-    lines.push({ content: separatorLine, align: "center" })
-    if (paymentBreakdown.cb > 0) lines.push({ content: formatTicketTextRow("CB", formatTicketAmount(paymentBreakdown.cb)) })
-    if (paymentBreakdown.cash > 0) lines.push({ content: formatTicketTextRow("Cash", formatTicketAmount(paymentBreakdown.cash)) })
-    if (renderedChange > 0) lines.push({ content: formatTicketTextRow("Rendu", formatTicketAmount(renderedChange)) })
-    if (paymentBreakdown.tr > 0) lines.push({ content: formatTicketTextRow("TR", formatTicketAmount(paymentBreakdown.tr)) })
-    lines.push({ content: ticketRef })
-    lines.push({ content: `Imprime le ${context.nowLabel}`, align: "right" })
-    lines.push({ content: "" })
-    lines.push({ content: shortSeparatorLine, align: "center" })
-
-    return lines
   }
 
   const buildBillTicketPdfLines = () => buildBillTicketPrintLines().map((line) => line.content)

@@ -11,6 +11,13 @@ import { ArrowLeft, Calendar, TrendingUp, Users, DollarSign, CreditCard, Banknot
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import {
+  buildReceiptTicketHtml,
+  buildTicketPaymentRows,
+  formatTicketDateTime,
+  type TicketItemRow,
+  type TicketTaxRow,
+} from "@/lib/ticket-layout"
 
 interface ServerStats {
   server_id: string
@@ -171,14 +178,6 @@ export default function HistoryPage() {
 
   const formatCurrency = (value: number) => `${Number(value || 0).toFixed(2)} €`
 
-  const escapeHtml = (value: string | undefined | null) =>
-    (value || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;")
-
   const openPrintWindow = (html: string) => {
     const printWindow = window.open("", "_blank")
     if (!printWindow) {
@@ -198,111 +197,6 @@ export default function HistoryPage() {
     }, 150)
   }
 
-  const formatTicketAmount = (value: number) =>
-    Number(value || 0).toLocaleString("fr-FR", {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })
-
-  const formatTicketDateTime = (value: string | Date) => {
-    const date = value instanceof Date ? value : new Date(value)
-    if (Number.isNaN(date.getTime())) return new Date().toLocaleString("fr-FR")
-    return date.toLocaleString("fr-FR", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    })
-  }
-
-  const buildTicketHtml = (title: string, body: string) => `
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>${escapeHtml(title)}</title>
-        <style>
-          * { box-sizing: border-box; }
-          html, body { margin: 0; padding: 0; background: #fff; }
-          body {
-            font-family: "Helvetica Neue", Arial, sans-serif;
-            color: #2f2f2f;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          #ticket-root {
-            width: 78mm;
-            margin: 0 auto;
-            padding: 6mm 4.5mm 7mm;
-            font-size: 16px;
-            line-height: 1.18;
-          }
-          .head-center { text-align: center; }
-          .head-title { font-size: 42px; font-weight: 500; line-height: 1; }
-          .head-line { font-size: 42px; font-weight: 500; line-height: 1; text-transform: uppercase; }
-          .specimen { font-size: 44px; font-weight: 700; margin-top: 2mm; }
-          .meta-date { margin-top: 7mm; font-size: 48px; font-weight: 700; line-height: 1.05; }
-          .meta-service { font-size: 50px; font-weight: 700; line-height: 1.05; margin-top: 1.2mm; }
-          .meta-table { font-size: 40px; font-weight: 600; line-height: 1.1; margin-top: 0.8mm; }
-          .price-label { font-size: 46px; margin-top: 2mm; margin-bottom: 3mm; }
-          .item-row {
-            display: grid;
-            grid-template-columns: 1fr auto auto;
-            column-gap: 4mm;
-            align-items: baseline;
-            margin: 0.8mm 0;
-            font-size: 49px;
-          }
-          .item-name { min-width: 0; word-break: break-word; }
-          .item-flag { min-width: 20mm; text-align: center; font-size: 46px; font-weight: 500; color: #3f3f3f; }
-          .item-price { min-width: 18mm; text-align: right; font-variant-numeric: tabular-nums; }
-          .item-note { margin: 0.4mm 0 0.8mm 2mm; font-size: 40px; color: #444; }
-          .summary-note { margin-top: 4.5mm; margin-bottom: 1.4mm; font-size: 44px; }
-          .sum-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            font-size: 50px;
-            margin: 0.8mm 0;
-            gap: 6mm;
-          }
-          .sum-row .sum-right { font-variant-numeric: tabular-nums; }
-          .sum-row.muted { font-size: 46px; color: #3b3b3b; }
-          .sum-row.due { font-size: 62px; font-weight: 700; margin-top: 1.8mm; }
-          .dash { margin: 3.4mm auto; text-align: center; font-size: 40px; color: #5a5a5a; }
-          .tax-head,
-          .tax-row {
-            display: grid;
-            grid-template-columns: 1.1fr 1fr 1fr 1fr;
-            column-gap: 2.5mm;
-            align-items: baseline;
-            font-variant-numeric: tabular-nums;
-          }
-          .tax-head { font-size: 48px; margin-bottom: 0.7mm; }
-          .tax-row { font-size: 46px; margin: 0.6mm 0; }
-          .tax-head span:not(:first-child),
-          .tax-row span:not(:first-child) { text-align: right; }
-          .payment-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: baseline;
-            font-size: 50px;
-            margin: 0.8mm 0;
-            font-variant-numeric: tabular-nums;
-            gap: 6mm;
-          }
-          .ticket-ref { margin-top: 2.6mm; font-size: 34px; color: #4f4f4f; }
-          .printed-at { text-align: right; margin-top: 2.2mm; font-size: 34px; color: #4f4f4f; }
-          .final-dash { margin-top: 5mm; text-align: center; font-size: 40px; color: #5a5a5a; }
-          @media print {
-            #ticket-root { width: auto; padding: 4mm 2.5mm 5mm; }
-          }
-        </style>
-      </head>
-      <body><div id="ticket-root">${body}</div></body>
-    </html>
-  `
-
   const getTicketContext = () => {
     const sale = transactionDetail?.sale || selectedTransaction
     const tableNumber = sale?.table_number || "-"
@@ -313,71 +207,21 @@ export default function HistoryPage() {
     return { tableNumber, serverName, nowLabel, saleDate, serviceLine }
   }
 
-  const getTicketHeaderHtml = () => `
-    <div class="head-center head-title">Sophia</div>
-    <div class="head-center head-line">67 BOULEVARD DE LA PLAGE</div>
-    <div class="head-center head-line">33970 LEGE-CAP-FERRET</div>
-    <div class="head-center head-line">+33615578419</div>
-    <div class="head-center head-line">SARL LILY</div>
-    <div class="head-center head-line">SIRET : 94077148800027</div>
-    <div class="head-center specimen">*** SPECIMEN ***</div>
-  `
-
   const getToFollowLabel = (status?: string) => {
-    if (status === "to_follow_1") return "À SUIVRE 1"
-    if (status === "to_follow_2") return "À SUIVRE 2"
+    if (status === "to_follow_1") return "A SUIVRE 1"
+    if (status === "to_follow_2") return "A SUIVRE 2"
     return ""
   }
 
-  const buildItemRowsHtml = (
-    rows: Array<{ label: string; amount: number; complimentary?: boolean; note?: string; followLabel?: string }>,
-  ) =>
-    rows
-      .map(
-        (row) => {
-          const rowFlag = [row.followLabel || "", row.complimentary ? "OFFERT" : ""].filter(Boolean).join(" • ")
-          return `
-          <div class="item-row">
-            <span class="item-name">${escapeHtml(row.label)}</span>
-            <span class="item-flag">${escapeHtml(rowFlag)}</span>
-            <span class="item-price">${formatTicketAmount(row.amount)}</span>
-          </div>
-          ${row.note ? `<div class="item-note">+ ${escapeHtml(row.note)}</div>` : ""}
-        `
-        },
-      )
-      .join("")
+  const getTransactionPaymentRows = () =>
+    buildTicketPaymentRows({
+      cb: transactionDetail?.paymentBreakdown.card || 0,
+      cash: transactionDetail?.paymentBreakdown.cash || 0,
+      tr: transactionDetail?.paymentBreakdown.other || 0,
+      renderedChange: 0,
+    })
 
-  const buildTaxRowsHtml = (rows: Array<{ rate: number; ht: number; tva: number; ttc: number }>) =>
-    rows
-      .map(
-        (row) => `
-          <div class="tax-row">
-            <span>${formatTicketAmount(row.rate)} %</span>
-            <span>${formatTicketAmount(row.ht)}</span>
-            <span>${formatTicketAmount(row.tva)}</span>
-            <span>${formatTicketAmount(row.ttc)}</span>
-          </div>
-        `,
-      )
-      .join("")
-
-  const buildPaymentRowsHtml = () => {
-    if (!transactionDetail) return ""
-    const rows: string[] = []
-    if (transactionDetail.paymentBreakdown.card > 0) {
-      rows.push(`<div class="payment-row"><span>CB</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.card)}</span></div>`)
-    }
-    if (transactionDetail.paymentBreakdown.cash > 0) {
-      rows.push(`<div class="payment-row"><span>Cash</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.cash)}</span></div>`)
-    }
-    if (transactionDetail.paymentBreakdown.other > 0) {
-      rows.push(`<div class="payment-row"><span>TR</span><span>${formatTicketAmount(transactionDetail.paymentBreakdown.other)}</span></div>`)
-    }
-    return rows.join("")
-  }
-
-  const getTransactionTaxRows = () => {
+  const getTransactionTaxRows = (): TicketTaxRow[] => {
     if (!transactionDetail) {
       return [
         { rate: 10, ht: 0, tva: 0, ttc: 0 },
@@ -429,13 +273,13 @@ export default function HistoryPage() {
         return sum + Number(supplement.amount || 0)
       }, 0)
 
-    const rows = [
+    const rows: TicketItemRow[] = [
       ...transactionDetail.items.map((item) => ({
         label: `${item.quantity} ${item.menu_name}`,
         amount: item.is_complimentary ? 0 : Number(item.line_total || 0),
         complimentary: item.is_complimentary,
         note: item.notes || undefined,
-        followLabel: getToFollowLabel(item.status),
+        flag: getToFollowLabel(item.status),
       })),
       ...transactionDetail.supplements.map((supplement) => ({
         label: `+ 1 ${supplement.name}`,
@@ -446,32 +290,24 @@ export default function HistoryPage() {
     ]
 
     const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const paymentRows = getTransactionPaymentRows()
 
-    const body = `
-      ${getTicketHeaderHtml()}
-      <div class="meta-date">${escapeHtml(context.saleDate)}</div>
-      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
-      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
-      <div class="price-label">Prix en €</div>
-      ${buildItemRowsHtml(rows)}
-      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
-      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
-      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(discountsIncluded)}</span></div>
-      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
-      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
-      <div class="dash">---------------------------------------------------</div>
-      <div class="tax-head">
-        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
-      </div>
-      ${buildTaxRowsHtml(taxRows)}
-      <div class="dash">---------------------------------------------------</div>
-      ${buildPaymentRowsHtml()}
-      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
-      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
-      <div class="final-dash">-------------------------------</div>
-    `
-
-    return buildTicketHtml(`Réimpression addition - Table ${transactionDetail.sale.table_number || "-"}`, body)
+    return buildReceiptTicketHtml({
+      documentTitle: `Réimpression addition - Table ${transactionDetail.sale.table_number || "-"}`,
+      metaDate: context.saleDate,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: rows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
   }
 
   const buildHistoryMealTicketHtml = () => {
@@ -485,38 +321,30 @@ export default function HistoryPage() {
     const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
     const remaining = Math.max(0, total - alreadyPaid)
     const perPerson = remaining / mealsCount
-    const taxRows = [
+    const taxRows: TicketTaxRow[] = [
       { rate: 10, ht: rate === 10 ? subtotal : 0, tva: rate === 10 ? taxAmount : 0, ttc: rate === 10 ? total : 0 },
       { rate: 20, ht: rate === 20 ? subtotal : 0, tva: rate === 20 ? taxAmount : 0, ttc: rate === 20 ? total : 0 },
     ]
     const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
-    const rows = [{ label: `${mealsCount} Ticket repas`, amount: total }]
+    const rows: TicketItemRow[] = [{ label: `${mealsCount} Ticket repas`, amount: total }]
+    const paymentRows = getTransactionPaymentRows()
 
-    const body = `
-      ${getTicketHeaderHtml()}
-      <div class="meta-date">${escapeHtml(context.saleDate)}</div>
-      <div class="meta-service">${escapeHtml(context.serviceLine)}</div>
-      <div class="meta-table">Table ${escapeHtml(context.tableNumber)}</div>
-      <div class="price-label">Prix en €</div>
-      ${buildItemRowsHtml(rows)}
-      <div class="summary-note">(Total restant par personne : ${formatTicketAmount(perPerson)})</div>
-      <div class="sum-row"><span>Total TTC</span><span class="sum-right">${formatTicketAmount(total)}</span></div>
-      <div class="sum-row muted"><span>(remises et offres inclus)</span><span class="sum-right">${formatTicketAmount(0)}</span></div>
-      <div class="sum-row"><span>Déjà encaissé</span><span class="sum-right">-${formatTicketAmount(alreadyPaid)}</span></div>
-      <div class="sum-row due"><span>Total TTC Dû</span><span class="sum-right">${formatTicketAmount(remaining)}</span></div>
-      <div class="dash">---------------------------------------------------</div>
-      <div class="tax-head">
-        <span>Taux</span><span>HT</span><span>TVA</span><span>TTC</span>
-      </div>
-      ${buildTaxRowsHtml(taxRows)}
-      <div class="dash">---------------------------------------------------</div>
-      ${buildPaymentRowsHtml()}
-      <div class="ticket-ref">${escapeHtml(ticketRef)}</div>
-      <div class="printed-at">Imprimé le ${escapeHtml(context.nowLabel)}</div>
-      <div class="final-dash">-------------------------------</div>
-    `
-
-    return buildTicketHtml(`Réimpression ticket repas - Table ${transactionDetail?.sale.table_number || "-"}`, body)
+    return buildReceiptTicketHtml({
+      documentTitle: `Réimpression ticket repas - Table ${transactionDetail?.sale.table_number || "-"}`,
+      metaDate: context.saleDate,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: rows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded: 0,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
   }
 
   const openMealTicketPreview = () => {

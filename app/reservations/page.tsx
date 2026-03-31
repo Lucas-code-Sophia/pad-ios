@@ -65,7 +65,7 @@ export default function ReservationsPage() {
     reservation_date: selectedDate,
     reservation_time: "19:00",
     party_size: "2",
-    duration_minutes: 90,
+    duration_minutes: 120,
     notes: "",
     created_by: "",
   })
@@ -359,9 +359,9 @@ export default function ReservationsPage() {
 
     const targetTime = tablePickerTarget === "add" ? newReservation.reservation_time : editingReservation?.reservation_time || ""
     const targetDuration = Number(
-      tablePickerTarget === "add" ? newReservation.duration_minutes : editingReservation?.duration_minutes || 90,
+      tablePickerTarget === "add" ? newReservation.duration_minutes : editingReservation?.duration_minutes || 120,
     )
-    const safeTargetDuration = Number.isFinite(targetDuration) && targetDuration > 0 ? targetDuration : 90
+    const safeTargetDuration = Number.isFinite(targetDuration) && targetDuration > 0 ? targetDuration : 120
     const targetStart = parseTimeToMinutes(targetTime)
     const targetReservationId = tablePickerTarget === "edit" ? editingReservation?.id : ""
 
@@ -372,9 +372,9 @@ export default function ReservationsPage() {
       if (targetReservationId && reservation.id === targetReservationId) continue
 
       const reservationStart = parseTimeToMinutes(reservation.reservation_time)
-      const reservationDuration = Number(reservation.duration_minutes || 90)
+      const reservationDuration = Number(reservation.duration_minutes || 120)
       const safeReservationDuration =
-        Number.isFinite(reservationDuration) && reservationDuration > 0 ? reservationDuration : 90
+        Number.isFinite(reservationDuration) && reservationDuration > 0 ? reservationDuration : 120
 
       const hasOverlap =
         targetStart != null &&
@@ -491,7 +491,7 @@ export default function ReservationsPage() {
         reservation_date: selectedDate,
         reservation_time: "19:00",
         party_size: "2",
-        duration_minutes: 90,
+        duration_minutes: 120,
         notes: "",
         created_by: "",
       })
@@ -551,7 +551,7 @@ export default function ReservationsPage() {
       reservation_date: reservation.reservation_date,
       reservation_time: (reservation.reservation_time || "").slice(0, 5),
       party_size: String(reservation.party_size),
-      duration_minutes: reservation.duration_minutes || 90,
+      duration_minutes: reservation.duration_minutes || 120,
       notes: reservation.notes || "",
     })
     setEditError("")

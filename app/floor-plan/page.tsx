@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, Reservation } from "@/lib/types"
@@ -31,6 +31,7 @@ import { toast } from "@/components/ui/use-toast"
 import { sortTablesForDisplay } from "@/lib/table-sort"
 
 type TableVisualStatus = "available" | "occupied" | "occupied_to_follow" | "reserved"
+type ReservationServiceFilter = "midi" | "soir"
 
 const toIsoDate = (date: Date) => {
   const yyyy = date.getFullYear()
@@ -68,6 +69,7 @@ export default function FloorPlanPage() {
   const [userAssignments, setUserAssignments] = useState<UserFloorPlanAssignments>({ assignments: {}, default_layout: "" })
   const tablesRequestRef = useRef<Promise<void> | null>(null)
   const reservationsRequestRef = useRef<Promise<void> | null>(null)
+  const [reservationServiceFilter, setReservationServiceFilter] = useState<ReservationServiceFilter>("midi")
 
   const reservationDateParam = String(searchParams.get("reservationDate") || "").trim()
   const reservationPlanMode = searchParams.get("reservationPlan") === "1"
@@ -80,6 +82,33 @@ export default function FloorPlanPage() {
     year: "numeric",
   })
 
+  const getReservationService = (reservation: Reservation): ReservationServiceFilter => {
+    const normalizedTime = String(reservation.reservation_time || "").slice(0, 5)
+    return normalizedTime <= "15:59" ? "midi" : "soir"
+  }
+
+  const reservationMatchesActiveService = (reservation: Reservation) => {
+    if (!reservationPlanMode) return true
+    return getReservationService(reservation) === reservationServiceFilter
+  }
+
+  const reservationsByTableForDisplay = useMemo(() => {
+    if (!reservationPlanMode) return reservationsByTable
+    const filtered: Record<string, Reservation[]> = {}
+    for (const [tableId, reservationList] of Object.entries(reservationsByTable)) {
+      const scopedReservations = reservationList.filter((reservation) => reservationMatchesActiveService(reservation))
+      if (scopedReservations.length > 0) {
+        filtered[tableId] = scopedReservations
+      }
+    }
+    return filtered
+  }, [reservationMatchesActiveService, reservationPlanMode, reservationServiceFilter, reservationsByTable])
+
+  const reservationsForDayForDisplay = useMemo(() => {
+    if (!reservationPlanMode) return reservationsForDay
+    return reservationsForDay.filter((reservation) => reservationMatchesActiveService(reservation))
+  }, [reservationMatchesActiveService, reservationPlanMode, reservationServiceFilter, reservationsForDay])
+
   useEffect(() => {
     if (!isLoading && !user) {
       router.push("/login")
@@ -87,7 +116,7 @@ export default function FloorPlanPage() {
   }, [user, isLoading, router])
 
   const getTodaySummary = (tableId: string) => {
-    const arr = reservationsByTable[tableId] || []
+    const arr = reservationsByTableForDisplay[tableId] || []
     if (arr.length === 0) return ""
     return arr.map((r) => `${r.party_size}p - ${r.reservation_time.slice(0, 5).replace(":", "h")}`).join(", ")
   }
@@ -108,7 +137,7 @@ export default function FloorPlanPage() {
           customer_phone: reservationEdit.customer_phone,
           reservation_date: reservationEdit.reservation_date,
           reservation_time: reservationEdit.reservation_time,
-          duration_minutes: reservationEdit.duration_minutes ?? 90,
+          duration_minutes: reservationEdit.duration_minutes ?? 120,
           party_size: reservationEdit.party_size,
           notes: reservationEdit.notes,
         }),
@@ -328,7 +357,7 @@ export default function FloorPlanPage() {
 
   const getTableStatus = (table: Table): TableVisualStatus => {
     if (!isReservationDateToday) {
-      return (reservationsByTable[table.id] || []).length > 0 ? "reserved" : "available"
+      return (reservationsByTableForDisplay[table.id] || []).length > 0 ? "reserved" : "available"
     }
 
     const status =
@@ -336,7 +365,7 @@ export default function FloorPlanPage() {
         ? table.has_to_follow
           ? "occupied_to_follow"
           : "occupied"
-        : (reservationsByTable[table.id] || []).length > 0
+        : (reservationsByTableForDisplay[table.id] || []).length > 0
           ? "reserved"
           : "available"
     return status
@@ -358,12 +387,16 @@ export default function FloorPlanPage() {
         const res = await fetch(`/api/reservations/by-table?tableId=${table.id}&date=${activeReservationDate}`)
         if (res.ok) {
           const data = await res.json()
-          setReservationsForDay(Array.isArray(data) ? data : [])
+          const reservations = Array.isArray(data) ? data : []
+          setReservationsForDay(reservations)
           // Preselect the next upcoming confirmed reservation if any
-          const upcoming = (Array.isArray(data) ? data : [])
+          const scopedReservations = reservationPlanMode
+            ? reservations.filter((reservation: Reservation) => reservationMatchesActiveService(reservation))
+            : reservations
+          const upcoming = scopedReservations
             .filter((r: Reservation) => r.status === "pending" || r.status === "confirmed")
             .sort((a: Reservation, b: Reservation) => (a.reservation_time < b.reservation_time ? -1 : 1))
-          setReservationEdit(upcoming[0] ?? null)
+          setReservationEdit(upcoming[0] ?? scopedReservations[0] ?? reservations[0] ?? null)
         } else {
           setReservationsForDay([])
           setReservationEdit(null)
@@ -444,10 +477,10 @@ export default function FloorPlanPage() {
             <div className="mb-3">
               <div className="text-xs uppercase tracking-wide text-slate-400 mb-2">Réservations du {activeReservationDateLabel}</div>
               <div className="max-h-80 overflow-y-auto space-y-1">
-              {reservationsForDay.length === 0 ? (
+              {reservationsForDayForDisplay.length === 0 ? (
                 <div className="text-slate-400 text-sm text-center py-2">Aucune réservation pour cette date sur cette table.</div>
               ) : (
-                reservationsForDay.map((r) => (
+                reservationsForDayForDisplay.map((r) => (
                   <button
                     key={r.id}
                     onClick={() => setReservationEdit(r)}
@@ -514,7 +547,7 @@ export default function FloorPlanPage() {
                   type="number"
                   min="15"
                   step="5"
-                  value={reservationEdit.duration_minutes ?? 90}
+                  value={reservationEdit.duration_minutes ?? 120}
                   onChange={(e) => handleReservationField("duration_minutes" as any, Number.parseInt(e.target.value || "0"))}
                   className="bg-slate-700 border-slate-600 text-sm"
                 />
@@ -634,7 +667,7 @@ export default function FloorPlanPage() {
   const reservedTablesCount = tableVisualStatuses.filter((entry) => entry.status === "reserved").length
   const servedCoversCount = tables.reduce((sum, table) => sum + (table.status === "occupied" ? table.seats : 0), 0)
   const reservationCountForDate = new Set(
-    Object.values(reservationsByTable)
+    Object.values(reservationsByTableForDisplay)
       .flat()
       .map((reservation) => reservation.id),
   ).size
@@ -1221,6 +1254,30 @@ export default function FloorPlanPage() {
             ? "Sélectionnez une table pour prendre une commande"
             : `Vue réservations du ${activeReservationDateLabel}`}
         </p>
+        {reservationPlanMode && (
+          <div className="mt-2 inline-flex items-center rounded-lg border border-slate-300 bg-white p-1 shadow-sm">
+            <button
+              onClick={() => setReservationServiceFilter("midi")}
+              className={`rounded-md px-3 py-1 text-xs sm:text-sm font-medium transition-colors ${
+                reservationServiceFilter === "midi"
+                  ? "bg-blue-600 text-white"
+                  : "text-slate-700 hover:bg-slate-100"
+              }`}
+            >
+              Midi
+            </button>
+            <button
+              onClick={() => setReservationServiceFilter("soir")}
+              className={`rounded-md px-3 py-1 text-xs sm:text-sm font-medium transition-colors ${
+                reservationServiceFilter === "soir"
+                  ? "bg-blue-600 text-white"
+                  : "text-slate-700 hover:bg-slate-100"
+              }`}
+            >
+              Soir
+            </button>
+          </div>
+        )}
         {!isReservationDateToday && (
           <p className="text-[11px] sm:text-sm text-slate-500 mt-1">
             Mode consultation: horaires et réservations par table pour la date sélectionnée.
