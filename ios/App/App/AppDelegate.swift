@@ -156,7 +156,8 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        guard let url = URL(string: "http://\(ip)/") else {
+        let timeoutMs = 4000
+        guard let url = URL(string: "http://\(ip)/cgi-bin/epos/service.cgi?devid=local_printer&timeout=\(timeoutMs)") else {
             resolve(call, data: [
                 "ok": false,
                 "reachable": false,
@@ -166,7 +167,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        var request = URLRequest(url: url, timeoutInterval: 4)
+        var request = URLRequest(url: url, timeoutInterval: TimeInterval(timeoutMs) / 1000)
         request.httpMethod = "GET"
 
         URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
