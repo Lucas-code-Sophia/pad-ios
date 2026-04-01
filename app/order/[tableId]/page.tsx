@@ -1684,15 +1684,22 @@ export default function OrderPage() {
     red: 1,
     rose: 2,
   }
-  const shouldSortByWineColor = selectedCategoryNameNormalized.includes("vin")
-  const displayedItems = shouldSortByWineColor
+  const isWineByGlassCategory =
+    selectedCategoryNameNormalized.includes("vin") && selectedCategoryNameNormalized.includes("verre")
+  const isWineBottleCategory =
+    selectedCategoryNameNormalized.includes("vin") && selectedCategoryNameNormalized.includes("bouteille")
+  const shouldKeepWineOrdering = isWineByGlassCategory || isWineBottleCategory
+  const displayedItems = shouldKeepWineOrdering
     ? [...filteredItems].sort((a, b) => {
         const rankA = wineColorOrder[(a.button_color || "").toLowerCase()] ?? 99
         const rankB = wineColorOrder[(b.button_color || "").toLowerCase()] ?? 99
         if (rankA !== rankB) return rankA - rankB
         return a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
       })
-    : filteredItems
+    : [...filteredItems].sort((a, b) => {
+        if (a.price !== b.price) return a.price - b.price
+        return a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
+      })
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
