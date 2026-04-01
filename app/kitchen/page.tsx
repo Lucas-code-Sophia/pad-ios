@@ -54,7 +54,7 @@ export default function KitchenPage() {
       const follow2Items = ticket.items.filter((item) => item.phase === "to_follow_2")
       const line = "-------------------------------"
       const directTextScale = 1.5
-      const followTextScale = 1
+      const followTextScale = 1.5
 
       const lines: EposTicket["lines"] = []
 

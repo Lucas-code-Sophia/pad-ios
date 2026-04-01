@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth-context"
 import type { Table, Reservation } from "@/lib/types"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import { LogOut, User, Settings, Plus, List, Calendar, Search, History } from "lucide-react"
+import { LogOut, User, Settings, Plus, List, Calendar, Search, History, Printer } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -623,7 +623,7 @@ export default function FloorPlanPage() {
       case "occupied":
         return "bg-red-600 hover:bg-red-700 border-red-500"
       case "reserved":
-        return "bg-yellow-600 hover:bg-yellow-700 border-yellow-500"
+        return "bg-green-600 hover:bg-green-700 border-green-500"
       default:
         return "bg-slate-600 hover:bg-slate-700 border-slate-500"
     }
@@ -921,7 +921,7 @@ export default function FloorPlanPage() {
         case "available": return "#16a34a"
         case "occupied_to_follow": return "#ec4899"
         case "occupied": return "#dc2626"
-        case "reserved": return "#ca8a04"
+        case "reserved": return "#16a34a"
         default: return "#475569"
       }
     }
@@ -1069,6 +1069,19 @@ export default function FloorPlanPage() {
           </div>
         </div>
         <div className="flex gap-1.5 sm:gap-2 overflow-x-auto pb-2 sm:pb-0">
+          <Button
+            onClick={() => {
+              const query = searchParams.toString()
+              const returnTo = query ? `/floor-plan?${query}` : "/floor-plan"
+              router.push(`/printer-sync?returnTo=${encodeURIComponent(returnTo)}`)
+            }}
+            variant="outline"
+            size="sm"
+            className="bg-slate-700 text-white border-slate-600 hover:bg-slate-600 whitespace-nowrap text-xs sm:text-sm"
+          >
+            <Printer className="h-3 w-3 sm:h-4 sm:w-4 sm:mr-2" />
+            <span className="hidden sm:inline">Imprimantes</span>
+          </Button>
           {user?.role === "manager" && (
             <Button
               onClick={() => router.push("/admin")}
@@ -1080,14 +1093,6 @@ export default function FloorPlanPage() {
               <span className="hidden sm:inline">Admin</span>
             </Button>
           )}
-          <Button
-            onClick={() => router.push("/reservations")}
-            size="sm"
-            className="bg-purple-600 hover:bg-purple-700 whitespace-nowrap text-xs sm:text-sm"
-          >
-            <Calendar className="h-3 w-3 sm:h-4 sm:w-4 sm:mr-2" />
-            <span className="hidden sm:inline">Réservations</span>
-          </Button>
           {!isReservationDateToday && (
             <Button
               onClick={() => router.push("/floor-plan")}
@@ -1300,7 +1305,7 @@ export default function FloorPlanPage() {
           <span className="text-xs sm:text-sm text-slate-700">Reste à suivre</span>
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
-          <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-yellow-600"></div>
+          <div className="h-3 w-3 sm:h-4 sm:w-4 rounded bg-green-600"></div>
           <span className="text-xs sm:text-sm text-slate-700">Réservée</span>
         </div>
       </div>

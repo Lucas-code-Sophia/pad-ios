@@ -126,13 +126,18 @@ export default function ReservationsPage() {
   }
 
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (isLoading) return
+    if (!user) {
       router.push("/login")
+      return
+    }
+    if (user.role !== "manager") {
+      router.push("/floor-plan")
     }
   }, [user, isLoading, router])
 
   useEffect(() => {
-    if (user) {
+    if (user?.role === "manager") {
       fetchReservations()
       fetchTables()
       fetchWhatsAppSettings()
@@ -141,7 +146,7 @@ export default function ReservationsPage() {
   }, [user, selectedDate])
 
   useEffect(() => {
-    if (user) {
+    if (user?.role === "manager") {
       fetchCalendarCounts()
     }
   }, [user, calendarYear, calendarMonth])
@@ -365,8 +370,7 @@ export default function ReservationsPage() {
     const targetStart = parseTimeToMinutes(targetTime)
     const targetReservationId = tablePickerTarget === "edit" ? editingReservation?.id : ""
 
-    const overlappingReservations: Reservation[] = []
-    const nonOverlappingReservations: Reservation[] = []
+    let hasOverlap = false
 
     for (const reservation of reservationsForTable) {
       if (targetReservationId && reservation.id === targetReservationId) continue
@@ -376,37 +380,19 @@ export default function ReservationsPage() {
       const safeReservationDuration =
         Number.isFinite(reservationDuration) && reservationDuration > 0 ? reservationDuration : 120
 
-      const hasOverlap =
+      const isOverlapping =
         targetStart != null &&
         reservationStart != null &&
         hasTimeOverlap(targetStart, safeTargetDuration, reservationStart, safeReservationDuration)
 
-      if (hasOverlap) overlappingReservations.push(reservation)
-      else nonOverlappingReservations.push(reservation)
+      if (isOverlapping) {
+        hasOverlap = true
+        break
+      }
     }
 
-    const otherSlots = Array.from(
-      new Set(
-        nonOverlappingReservations
-          .map((reservation) => String(reservation.reservation_time || "").slice(0, 5))
-          .filter((hour) => Boolean(hour)),
-      ),
-    ).sort((a, b) => a.localeCompare(b))
-
-    const compactSlots = otherSlots.slice(0, 3)
-    const remaining = Math.max(otherSlots.length - compactSlots.length, 0)
-    const otherSlotsLabel = otherSlots.length === 0
-      ? ""
-      : remaining > 0
-        ? `Autres résas: ${compactSlots.join(", ")} +${remaining}`
-        : `${otherSlots.length > 1 ? "Autres résas" : "Autre résa"}: ${compactSlots.join(", ")}`
-
     return {
-      overlappingReservations,
-      nonOverlappingReservations,
-      hasOverlap: overlappingReservations.length > 0,
-      hasOtherSlots: nonOverlappingReservations.length > 0,
-      otherSlotsLabel,
+      hasOverlap,
     }
   }
 
@@ -1554,11 +1540,6 @@ export default function ReservationsPage() {
                   {" · "}
                   <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm" style={{ backgroundColor: "#16a34a" }} /> Dispo</span>
                   {" · "}
-                  <span className="inline-flex items-center gap-1">
-                    <span className="inline-block w-2 h-2 rounded-sm border border-orange-300" style={{ backgroundColor: "#16a34a" }} />
-                    Dispo (autres créneaux)
-                  </span>
-                  {" · "}
                   <span className="inline-flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-sm bg-red-500" /> Conflit horaire</span>
                 </p>
                 <p className="text-slate-300 text-xs mt-0.5">
@@ -1612,7 +1593,6 @@ export default function ReservationsPage() {
                       const tableContext = getPickerTableReservationContext(table.id)
                       const isSelected = pickerSelectedIds.includes(table.id)
                       const hasConflict = tableContext.hasOverlap
-                      const hasOtherSlots = tableContext.hasOtherSlots
                       const isDisabled = hasConflict && !isSelected
                       return (
                         <button
@@ -1626,17 +1606,13 @@ export default function ReservationsPage() {
                               ? "bg-blue-600 ring-2 ring-blue-300 border-blue-300"
                               : hasConflict
                                 ? "bg-red-600 border-red-300"
-                                : hasOtherSlots
-                                  ? "bg-green-600 hover:bg-green-500 border-orange-300"
-                                  : "bg-green-600 hover:bg-green-500 border-white/30"
+                                : "bg-green-600 hover:bg-green-500 border-white/30"
                           }`}
                         >
                           <div>{table.table_number}</div>
                           <div className="text-[10px] opacity-80">{table.seats} pl.</div>
                           {hasConflict ? (
                             <div className="text-[9px] mt-1 opacity-90">Conflit horaire</div>
-                          ) : hasOtherSlots ? (
-                            <div className="text-[9px] mt-1 opacity-90">{tableContext.otherSlotsLabel}</div>
                           ) : null}
                           {isSelected && (
                             <div className="text-[9px] mt-1 font-semibold">Sélectionnée</div>
@@ -1684,7 +1660,6 @@ export default function ReservationsPage() {
                         const tableContext = getPickerTableReservationContext(table.id)
                         const isCurrentlySelected = pickerSelectedIds.includes(table.id)
                         const hasConflict = tableContext.hasOverlap
-                        const hasOtherSlots = tableContext.hasOtherSlots
                         const isDisabled = hasConflict && !isCurrentlySelected
 
                         return (
@@ -1713,13 +1688,9 @@ export default function ReservationsPage() {
                                 ? "3px solid #93c5fd"
                                 : hasConflict
                                   ? "2px solid #fca5a5"
-                                  : hasOtherSlots
-                                    ? "2px solid #fdba74"
-                                : "2px solid rgba(255,255,255,0.3)",
+                                  : "2px solid rgba(255,255,255,0.3)",
                               boxShadow: isCurrentlySelected
                                 ? "0 0 12px rgba(37,99,235,0.55)"
-                                : hasOtherSlots
-                                  ? "0 0 10px rgba(251,146,60,0.3)"
                                 : "0 2px 6px rgba(0,0,0,0.2)",
                               transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined,
                             }}
@@ -1729,10 +1700,6 @@ export default function ReservationsPage() {
                             {hasConflict ? (
                               <span className="text-[7px] sm:text-[9px] opacity-90 leading-tight max-w-full truncate px-0.5">
                                 Conflit horaire
-                              </span>
-                            ) : hasOtherSlots ? (
-                              <span className="text-[7px] sm:text-[9px] opacity-90 leading-tight max-w-full truncate px-0.5">
-                                {tableContext.otherSlotsLabel}
                               </span>
                             ) : null}
                           </button>

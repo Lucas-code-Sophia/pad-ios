@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef, type TouchEvent } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, Order, OrderItem, MenuItem, PaymentItem, Supplement } from "@/lib/types"
@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
-import { ArrowLeft, CreditCard, Banknote, Printer, Users, CheckCircle, Gift, Plus, Minus, Mail } from "lucide-react"
+import { ArrowLeft, CreditCard, Banknote, Printer, Users, CheckCircle, Gift, Plus, Minus, Mail, Trash2 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -98,6 +98,7 @@ export default function BillPage() {
   const [paidAmount, setPaidAmount] = useState(0)
   const [paymentsCount, setPaymentsCount] = useState(0)
   const [payments, setPayments] = useState<BillPaymentEntry[]>([])
+  const [swipedBillRowId, setSwipedBillRowId] = useState<string | null>(null)
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [customAmount, setCustomAmount] = useState("")
   const [employeeDiscountActive, setEmployeeDiscountActive] = useState(false)
@@ -127,6 +128,8 @@ export default function BillPage() {
   const [sendingMealEmail, setSendingMealEmail] = useState(false)
   const [printingBillTicket, setPrintingBillTicket] = useState(false)
   const [printingMealTicket, setPrintingMealTicket] = useState(false)
+  const billRowTouchRef = useRef<{ rowId: string; startX: number } | null>(null)
+  const billSwipeTriggeredAtRef = useRef(0)
   const canAccessBill = user?.role === "manager" || Boolean(user?.can_access_bill)
   const canUseEmployeeDiscount = user?.role === "manager"
 
@@ -196,6 +199,37 @@ export default function BillPage() {
       setEmployeeDiscountActive(false)
     }
   }, [canUseEmployeeDiscount, splitMode])
+
+  useEffect(() => {
+    setSelectedItemQuantities((prev) => {
+      if (prev.size === 0) return prev
+      const validItemIds = new Set(items.map((item) => item.id))
+      let changed = false
+      const next = new Map<string, number>()
+      prev.forEach((quantity, itemId) => {
+        if (validItemIds.has(itemId)) {
+          next.set(itemId, quantity)
+        } else {
+          changed = true
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [items])
+
+  useEffect(() => {
+    if (!swipedBillRowId) return
+
+    const rowExists = swipedBillRowId.startsWith("item:")
+      ? items.some((item) => `item:${item.id}` === swipedBillRowId)
+      : swipedBillRowId.startsWith("supp:")
+        ? supplements.some((supplement) => `supp:${supplement.id}` === swipedBillRowId)
+        : false
+
+    if (!rowExists) {
+      setSwipedBillRowId(null)
+    }
+  }, [items, supplements, swipedBillRowId])
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -417,6 +451,113 @@ export default function BillPage() {
       }
       return newMap
     })
+  }
+
+  const handleBillRowTouchStart = (rowId: string, event: TouchEvent<HTMLDivElement>) => {
+    billRowTouchRef.current = {
+      rowId,
+      startX: event.changedTouches[0]?.clientX ?? 0,
+    }
+  }
+
+  const handleBillRowTouchEnd = (rowId: string, event: TouchEvent<HTMLDivElement>) => {
+    const touchState = billRowTouchRef.current
+    if (!touchState || touchState.rowId !== rowId) return
+
+    const endX = event.changedTouches[0]?.clientX ?? touchState.startX
+    const deltaX = endX - touchState.startX
+
+    if (deltaX <= -45) {
+      setSwipedBillRowId(rowId)
+      billSwipeTriggeredAtRef.current = Date.now()
+    } else if (deltaX >= 30 && swipedBillRowId === rowId) {
+      setSwipedBillRowId(null)
+      billSwipeTriggeredAtRef.current = Date.now()
+    }
+
+    billRowTouchRef.current = null
+  }
+
+  const shouldIgnoreBillRowClick = () => Date.now() - billSwipeTriggeredAtRef.current < 250
+
+  const handleDeleteBillItem = async (item: OrderItemWithMenu) => {
+    if (!order?.id) return
+
+    if (item.paid_quantity > 0) {
+      alert("Impossible de supprimer un article déjà payé.")
+      return
+    }
+
+    const itemName = item.menu_item?.name || "cet article"
+    const shouldDelete = confirm(`Supprimer ${item.quantity}x ${itemName} de la commande ?`)
+    if (!shouldDelete) return
+
+    try {
+      const response = await fetch("/api/orders/fire-follow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: order.id,
+          items: [
+            {
+              cartItemId: item.id,
+              menuItemId: item.menu_item_id,
+              quantity: 0,
+              price: item.price,
+              status: item.status,
+              notes: item.notes,
+              isComplimentary: item.is_complimentary || false,
+              complimentaryReason: item.complimentary_reason,
+            },
+          ],
+          serverId: user?.id || "",
+        }),
+      })
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}))
+        throw new Error(errorPayload?.error || "Suppression impossible")
+      }
+
+      setSwipedBillRowId(null)
+      setSelectedItemQuantities((prev) => {
+        if (!prev.has(item.id)) return prev
+        const next = new Map(prev)
+        next.delete(item.id)
+        return next
+      })
+      await fetchData()
+    } catch (error) {
+      console.error("[v0] Error deleting bill item:", error)
+      alert("Impossible de supprimer cet article.")
+    }
+  }
+
+  const handleDeleteBillSupplement = async (supplement: Supplement) => {
+    if (!order?.id) return
+
+    const shouldDelete = confirm(`Supprimer le supplément "${supplement.name}" ?`)
+    if (!shouldDelete) return
+
+    try {
+      const response = await fetch(
+        `/api/supplements?id=${encodeURIComponent(supplement.id)}&orderId=${encodeURIComponent(order.id)}`,
+        {
+          method: "DELETE",
+        },
+      )
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}))
+        throw new Error(errorPayload?.error || "Suppression impossible")
+      }
+
+      setSwipedBillRowId(null)
+      await fetchData()
+    } catch (error) {
+      console.error("[v0] Error deleting bill supplement:", error)
+      alert("Impossible de supprimer ce supplément.")
+    }
   }
 
   const handlePayment = async () => {
@@ -1098,28 +1239,69 @@ export default function BillPage() {
                 const isSelected = selectedQty > 0
                 const isFullyPaid = item.paid_quantity >= item.quantity
                 const isSelectableInItemsMode = splitMode === "items" && !isFullyPaid && !item.is_complimentary
+                const rowId = `item:${item.id}`
+                const isSwiped = swipedBillRowId === rowId
+                const canDeleteBillRow = item.paid_quantity === 0
 
                 return (
-                  <div
-                    key={item.id}
-                    onClick={(event) => {
-                      if (!isSelectableInItemsMode) return
-                      const target = event.target as HTMLElement
-                      if (target.closest("button, input, textarea, select, [role='checkbox']")) return
-                      toggleItemSelection(item.id, remainingQty)
-                    }}
-                    className={`p-2 sm:p-3 rounded ${
-                      splitMode === "items" ? "border-2" : "border"
-                    } ${
-                      isSelected
-                        ? "bg-blue-900/30 border-blue-700"
-                        : isFullyPaid
-                          ? "bg-green-900/20 border-green-700"
-                          : item.is_complimentary
+                  <div key={item.id} className="group relative overflow-hidden rounded">
+                    <button
+                      type="button"
+                      disabled={!canDeleteBillRow}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleDeleteBillItem(item)
+                      }}
+                      className={`absolute inset-y-0 right-0 w-20 text-white flex flex-col items-center justify-center transition-opacity duration-150 ${
+                        canDeleteBillRow
+                          ? "bg-red-600 hover:bg-red-700"
+                          : "bg-slate-600 cursor-not-allowed"
+                      } ${
+                        isSwiped
+                          ? "opacity-100 pointer-events-auto"
+                          : "opacity-0 pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto"
+                      }`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span className="text-[10px] leading-tight mt-0.5">
+                        {canDeleteBillRow ? "Suppr." : "Payé"}
+                      </span>
+                    </button>
+
+                    <div
+                      onTouchStart={(event) => {
+                        if (!canDeleteBillRow) return
+                        handleBillRowTouchStart(rowId, event)
+                      }}
+                      onTouchEnd={(event) => {
+                        if (!canDeleteBillRow) return
+                        handleBillRowTouchEnd(rowId, event)
+                      }}
+                      onClick={(event) => {
+                        if (shouldIgnoreBillRowClick()) return
+                        if (isSwiped) {
+                          setSwipedBillRowId(null)
+                          return
+                        }
+                        if (!isSelectableInItemsMode) return
+                        const target = event.target as HTMLElement
+                        if (target.closest("button, input, textarea, select, [role='checkbox']")) return
+                        toggleItemSelection(item.id, remainingQty)
+                      }}
+                      className={`relative z-10 p-2 sm:p-3 rounded transition-transform duration-200 ${
+                        isSwiped ? "-translate-x-20" : "translate-x-0"
+                      } ${
+                        splitMode === "items" ? "border-2" : "border"
+                      } ${
+                        isSelected
+                          ? "bg-blue-900/30 border-blue-700"
+                          : isFullyPaid
                             ? "bg-green-900/20 border-green-700"
-                            : "bg-slate-900 border-slate-700"
-                    } ${isSelectableInItemsMode ? "cursor-pointer" : ""}`}
-                  >
+                            : item.is_complimentary
+                              ? "bg-green-900/20 border-green-700"
+                              : "bg-slate-900 border-slate-700"
+                      } ${isSelectableInItemsMode ? "cursor-pointer" : ""}`}
+                    >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0">
                         {isSelectableInItemsMode && (
@@ -1257,45 +1439,75 @@ export default function BillPage() {
                         </div>
                       </div>
                     )}
+                    </div>
                   </div>
                 )
               })}
 
-              {visibleSupplements.map((supplement) => (
-                <div
-                  key={supplement.id}
-                  className={`p-2 sm:p-3 rounded border ${supplement.is_complimentary ? "bg-green-900/20 border-green-700" : "bg-purple-900/20 border-purple-700"}`}
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p
-                          className={`text-white font-medium text-sm sm:text-base ${supplement.is_complimentary ? "line-through text-slate-500" : ""}`}
-                        >
-                          {supplement.name} (supplément)
-                        </p>
-                        {supplement.is_complimentary && (
-                          <Badge className="bg-green-600 text-xs flex items-center gap-1">
-                            <Gift className="h-3 w-3" />
-                            Offert
-                          </Badge>
-                        )}
+              {visibleSupplements.map((supplement) => {
+                const rowId = `supp:${supplement.id}`
+                const isSwiped = swipedBillRowId === rowId
+                return (
+                  <div key={supplement.id} className="group relative overflow-hidden rounded">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleDeleteBillSupplement(supplement)
+                      }}
+                      className={`absolute inset-y-0 right-0 w-20 bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center transition-opacity duration-150 ${
+                        isSwiped
+                          ? "opacity-100 pointer-events-auto"
+                          : "opacity-0 pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto"
+                      }`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span className="text-[10px] leading-tight mt-0.5">Suppr.</span>
+                    </button>
+
+                    <div
+                      onTouchStart={(event) => handleBillRowTouchStart(rowId, event)}
+                      onTouchEnd={(event) => handleBillRowTouchEnd(rowId, event)}
+                      onClick={() => {
+                        if (shouldIgnoreBillRowClick()) return
+                        if (isSwiped) setSwipedBillRowId(null)
+                      }}
+                      className={`relative z-10 p-2 sm:p-3 rounded border transition-transform duration-200 ${
+                        isSwiped ? "-translate-x-20" : "translate-x-0"
+                      } ${supplement.is_complimentary ? "bg-green-900/20 border-green-700" : "bg-purple-900/20 border-purple-700"}`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p
+                              className={`text-white font-medium text-sm sm:text-base ${supplement.is_complimentary ? "line-through text-slate-500" : ""}`}
+                            >
+                              {supplement.name} (supplément)
+                            </p>
+                            {supplement.is_complimentary && (
+                              <Badge className="bg-green-600 text-xs flex items-center gap-1">
+                                <Gift className="h-3 w-3" />
+                                Offert
+                              </Badge>
+                            )}
+                          </div>
+                          {supplement.notes && <p className="text-xs text-slate-400 italic">{supplement.notes}</p>}
+                          {supplement.is_complimentary && supplement.complimentary_reason && (
+                            <p className="text-xs text-green-400 italic">{supplement.complimentary_reason}</p>
+                          )}
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p
+                            className={`text-white font-bold text-sm sm:text-base ${supplement.is_complimentary ? "line-through text-slate-500" : ""}`}
+                          >
+                            {supplement.is_complimentary ? "0.00" : supplement.amount.toFixed(2)} €
+                          </p>
+                        </div>
                       </div>
-                      {supplement.notes && <p className="text-xs text-slate-400 italic">{supplement.notes}</p>}
-                      {supplement.is_complimentary && supplement.complimentary_reason && (
-                        <p className="text-xs text-green-400 italic">{supplement.complimentary_reason}</p>
-                      )}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p
-                        className={`text-white font-bold text-sm sm:text-base ${supplement.is_complimentary ? "line-through text-slate-500" : ""}`}
-                      >
-                        {supplement.is_complimentary ? "0.00" : supplement.amount.toFixed(2)} €
-                      </p>
                     </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             <div className="border-t border-slate-700 mt-4 sm:mt-6 pt-3 sm:pt-4 space-y-2">

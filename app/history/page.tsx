@@ -179,22 +179,45 @@ export default function HistoryPage() {
   const formatCurrency = (value: number) => `${Number(value || 0).toFixed(2)} €`
 
   const openPrintWindow = (html: string) => {
-    const printWindow = window.open("", "_blank")
-    if (!printWindow) {
-      alert("Le navigateur a bloqué la fenêtre d'impression. Autorisez les popups puis réessayez.")
-      return
+    if (typeof document === "undefined") return
+
+    const iframe = document.createElement("iframe")
+    iframe.setAttribute("aria-hidden", "true")
+    iframe.style.position = "fixed"
+    iframe.style.right = "0"
+    iframe.style.bottom = "0"
+    iframe.style.width = "0"
+    iframe.style.height = "0"
+    iframe.style.border = "0"
+    iframe.style.opacity = "0"
+    iframe.style.pointerEvents = "none"
+
+    const cleanup = () => {
+      window.setTimeout(() => {
+        iframe.remove()
+      }, 500)
     }
 
-    printWindow.document.open()
-    printWindow.document.write(html)
-    printWindow.document.close()
-    printWindow.focus()
-    printWindow.onafterprint = () => {
-      printWindow.close()
+    iframe.onload = () => {
+      const printFrameWindow = iframe.contentWindow
+      if (!printFrameWindow) {
+        cleanup()
+        alert("Impossible de lancer l'impression.")
+        return
+      }
+
+      try {
+        printFrameWindow.focus()
+        printFrameWindow.print()
+      } catch (error) {
+        alert("Impossible de lancer l'impression.")
+      } finally {
+        cleanup()
+      }
     }
-    setTimeout(() => {
-      printWindow.print()
-    }, 150)
+
+    iframe.srcdoc = html
+    document.body.appendChild(iframe)
   }
 
   const getTicketContext = () => {

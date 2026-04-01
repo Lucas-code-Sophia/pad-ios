@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, type TouchEvent } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, MenuCategory, MenuItem, Order, OrderItem } from "@/lib/types"
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
-import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert, CheckCircle2, AlertTriangle, XCircle, Info, Search } from "lucide-react"
+import { ArrowLeft, Plus, Minus, Send, Clock, DollarSign, Gift, AlertCircle, ShieldAlert, CheckCircle2, AlertTriangle, XCircle, Info, Search, Trash2 } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -183,6 +183,8 @@ export default function OrderPage() {
   const [allergenMap, setAllergenMap] = useState<Record<string, Array<{ id: string; name: string; emoji: string }>>>({})
   const [sendFeedback, setSendFeedback] = useState<SendFeedback | null>(null)
   const sendFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [swipedExistingItemId, setSwipedExistingItemId] = useState<string | null>(null)
+  const existingItemTouchRef = useRef<{ itemId: string; startX: number } | null>(null)
 
   // Timer : temps écoulé depuis l'ouverture de la commande
   useEffect(() => {
@@ -349,11 +351,9 @@ export default function OrderPage() {
     const follow2CurrentItems = sentStationItems.filter((item) => item.status === "to_follow_2")
     const follow1FutureItems = remainingStationItems.filter((item) => item.status === "to_follow_1")
     const follow2FutureItems = remainingStationItems.filter((item) => item.status === "to_follow_2")
-    const follow1Items = [...follow1CurrentItems, ...follow1FutureItems]
-    const follow2Items = [...follow2CurrentItems, ...follow2FutureItems]
     const line = "-------------------------------"
     const directTextScale = 1.5
-    const followTextScale = 1
+    const followFutureTextScale = 1
     const lines: EposTicket["lines"] = []
 
     lines.push({ content: `Table ${table?.table_number || tableId}`, bold: true, fontScale: directTextScale })
@@ -373,30 +373,41 @@ export default function OrderPage() {
       })
     }
 
+    const pushFollowSection = (label: string, currentItems: CartItem[], futureItems: CartItem[]) => {
+      if (currentItems.length > 0) {
+        lines.push({ content: label })
+        // Les "à suivre" effectivement envoyés doivent sortir à la même taille que le direct.
+        pushItems(currentItems, false, directTextScale)
+      }
+
+      if (futureItems.length > 0) {
+        if (currentItems.length > 0) {
+          lines.push({ content: line, align: "center" })
+        }
+        lines.push({ content: `${label} (A VENIR)` })
+        pushItems(futureItems, false, followFutureTextScale)
+      }
+    }
+
     if (directItems.length > 0) {
       lines.push({ content: "DIRECT", bold: true })
       pushItems(directItems, true, directTextScale)
     }
 
-    if (directItems.length > 0 && (follow1Items.length > 0 || follow2Items.length > 0)) {
+    const hasFollow1Section = follow1CurrentItems.length > 0 || follow1FutureItems.length > 0
+    const hasFollow2Section = follow2CurrentItems.length > 0 || follow2FutureItems.length > 0
+
+    if (directItems.length > 0 && (hasFollow1Section || hasFollow2Section)) {
       lines.push({ content: line, align: "center" })
     }
 
-    if (follow1Items.length > 0) {
-      const follow1Label = follow1FutureItems.length > 0 && follow1CurrentItems.length === 0 ? "A SUIVRE 1 (A VENIR)" : "A SUIVRE 1"
-      lines.push({ content: follow1Label })
-      pushItems(follow1Items, false, followTextScale)
-    }
+    pushFollowSection("A SUIVRE 1", follow1CurrentItems, follow1FutureItems)
 
-    if (follow1Items.length > 0 && follow2Items.length > 0) {
+    if (hasFollow1Section && hasFollow2Section) {
       lines.push({ content: line, align: "center" })
     }
 
-    if (follow2Items.length > 0) {
-      const follow2Label = follow2FutureItems.length > 0 && follow2CurrentItems.length === 0 ? "A SUIVRE 2 (A VENIR)" : "A SUIVRE 2"
-      lines.push({ content: follow2Label })
-      pushItems(follow2Items, false, followTextScale)
-    }
+    pushFollowSection("A SUIVRE 2", follow2CurrentItems, follow2FutureItems)
 
     return {
       title: station === "bar" ? "BAR" : "CUISINE",
@@ -437,6 +448,14 @@ export default function OrderPage() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (!swipedExistingItemId) return
+    const stillExists = existingItems.some((item) => item.id === swipedExistingItemId)
+    if (!stillExists) {
+      setSwipedExistingItemId(null)
+    }
+  }, [existingItems, swipedExistingItemId])
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -982,6 +1001,71 @@ export default function OrderPage() {
     addToCart(item)
   }
 
+  const handleExistingItemTouchStart = (itemId: string, event: TouchEvent<HTMLDivElement>) => {
+    existingItemTouchRef.current = {
+      itemId,
+      startX: event.changedTouches[0]?.clientX ?? 0,
+    }
+  }
+
+  const handleExistingItemTouchEnd = (itemId: string, event: TouchEvent<HTMLDivElement>) => {
+    const touchState = existingItemTouchRef.current
+    if (!touchState || touchState.itemId !== itemId) return
+
+    const endX = event.changedTouches[0]?.clientX ?? touchState.startX
+    const deltaX = endX - touchState.startX
+
+    if (deltaX <= -45) {
+      setSwipedExistingItemId(itemId)
+    } else if (deltaX >= 30 && swipedExistingItemId === itemId) {
+      setSwipedExistingItemId(null)
+    }
+
+    existingItemTouchRef.current = null
+  }
+
+  const removeExistingItem = async (item: OrderItem) => {
+    if (!currentOrder?.id) return
+
+    const itemName = menuItems.find((menuItem) => menuItem.id === item.menu_item_id)?.name || "cet article"
+    const shouldDelete = confirm(`Supprimer ${item.quantity}x ${itemName} de la commande ?`)
+    if (!shouldDelete) return
+
+    try {
+      const response = await fetch("/api/orders/fire-follow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: currentOrder.id,
+          items: [
+            {
+              cartItemId: item.id,
+              menuItemId: item.menu_item_id,
+              quantity: 0,
+              price: item.price,
+              status: item.status,
+              notes: item.notes,
+              isComplimentary: item.is_complimentary || false,
+              complimentaryReason: item.complimentary_reason,
+            },
+          ],
+          serverId: user?.id || "",
+        }),
+      })
+
+      if (!response.ok) {
+        const errorPayload = await response.json().catch(() => ({}))
+        throw new Error(errorPayload?.error || "Suppression impossible")
+      }
+
+      setSwipedExistingItemId(null)
+      await fetchOrderData()
+    } catch (error) {
+      console.error("[v0] Error deleting existing item:", error)
+      alert("Impossible de supprimer cet article.")
+    }
+  }
+
   const removeFromCart = async (cartItemId: string) => {
     // Trouver l'article dans le panier
     const item = cart.find((item) => item.cartItemId === cartItemId)
@@ -1432,6 +1516,8 @@ export default function OrderPage() {
 
           showSendFeedback(feedback)
         }
+
+        router.push("/floor-plan")
       } else {
         throw new Error("Failed to create order")
       }
@@ -1544,6 +1630,8 @@ export default function OrderPage() {
 
           showSendFeedback(feedback)
         }
+
+        router.push("/floor-plan")
       } else {
         throw new Error("Failed to fire follow items")
       }
@@ -1999,23 +2087,48 @@ export default function OrderPage() {
               <div className="mb-3 sm:mb-4">
                 <h3 className="text-xs sm:text-sm font-semibold text-slate-400 mb-2">Déjà commandé</h3>
                 <div className="space-y-2 max-h-32 sm:max-h-40 overflow-y-auto">
-                  {existingItems.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between text-xs sm:text-sm text-slate-300 bg-slate-900/50 p-2 rounded"
-                    >
-                      <span>
-                        {item.quantity}x {menuItems.find((m) => m.id === item.menu_item_id)?.name}
-                      </span>
-                      <Badge variant="default" className="text-xs">
-                        {item.status === "fired" ? "Envoyé" : 
-                         item.status === "completed" ? "Terminé" : 
-                         item.status === "to_follow_1" ? "À suivre 1" :
-                         item.status === "to_follow_2" ? "À suivre 2" :
-                         "En attente"}
-                      </Badge>
-                    </div>
-                  ))}
+                  {existingItems.map((item) => {
+                    const isSwiped = swipedExistingItemId === item.id
+                    return (
+                      <div key={item.id} className="group relative overflow-hidden rounded">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            removeExistingItem(item)
+                          }}
+                          className={`absolute inset-y-0 right-0 w-20 bg-red-600 hover:bg-red-700 text-white flex flex-col items-center justify-center transition-opacity duration-150 ${
+                            isSwiped
+                              ? "opacity-100 pointer-events-auto"
+                              : "opacity-0 pointer-events-none md:group-hover:opacity-100 md:group-hover:pointer-events-auto"
+                          }`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span className="text-[10px] leading-tight mt-0.5">Suppr.</span>
+                        </button>
+
+                        <div
+                          onClick={() => {
+                            if (isSwiped) setSwipedExistingItemId(null)
+                          }}
+                          onTouchStart={(event) => handleExistingItemTouchStart(item.id, event)}
+                          onTouchEnd={(event) => handleExistingItemTouchEnd(item.id, event)}
+                          className={`relative z-10 flex items-center justify-between text-xs sm:text-sm text-slate-300 bg-slate-900/50 p-2 transition-transform duration-200 ${isSwiped ? "-translate-x-20" : "translate-x-0"}`}
+                        >
+                          <span>
+                            {item.quantity}x {menuItems.find((m) => m.id === item.menu_item_id)?.name}
+                          </span>
+                          <Badge variant="default" className="text-xs">
+                            {item.status === "fired" ? "Envoyé" : 
+                             item.status === "completed" ? "Terminé" : 
+                             item.status === "to_follow_1" ? "À suivre 1" :
+                             item.status === "to_follow_2" ? "À suivre 2" :
+                             "En attente"}
+                          </Badge>
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             )}
