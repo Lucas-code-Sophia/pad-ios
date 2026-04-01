@@ -373,43 +373,9 @@ export default function FloorPlanPage() {
 
   const handleTableClick = async (table: Table) => {
     const status = getTableStatus(table)
-    if (!isReservationDateToday && status === "available") return
-
-    if (status === "available" || status === "occupied" || status === "occupied_to_follow") {
+    if (!isReservationDateToday) return
+    if (status === "available" || status === "occupied" || status === "occupied_to_follow" || status === "reserved") {
       router.push(`/order/${table.id}`)
-    } else if (status === "reserved") {
-      // Open inline reservation editor for the reserved table
-      setReservationTableLabel(table.table_number)
-      setReservationTableId(table.id)
-      setShowReservationEditor(true)
-      setReservationLoading(true)
-      try {
-        const res = await fetch(`/api/reservations/by-table?tableId=${table.id}&date=${activeReservationDate}`)
-        if (res.ok) {
-          const data = await res.json()
-          const reservations = Array.isArray(data) ? data : []
-          setReservationsForDay(reservations)
-          // Preselect the next upcoming confirmed reservation if any
-          const scopedReservations = reservationPlanMode
-            ? reservations.filter((reservation: Reservation) => reservationMatchesActiveService(reservation))
-            : reservations
-          const upcoming = scopedReservations
-            .filter((r: Reservation) => r.status === "pending" || r.status === "confirmed")
-            .sort((a: Reservation, b: Reservation) => (a.reservation_time < b.reservation_time ? -1 : 1))
-          setReservationEdit(upcoming[0] ?? scopedReservations[0] ?? reservations[0] ?? null)
-        } else {
-          setReservationsForDay([])
-          setReservationEdit(null)
-          const err = await res.json().catch(() => ({}))
-          toast({ title: "Erreur", description: err?.error || "Chargement des réservations échoué", variant: "destructive" as any })
-        }
-      } catch (e) {
-        setReservationsForDay([])
-        setReservationEdit(null)
-        toast({ title: "Erreur", description: "Chargement des réservations échoué", variant: "destructive" as any })
-      } finally {
-        setReservationLoading(false)
-      }
     }
   }
 
@@ -689,9 +655,6 @@ export default function FloorPlanPage() {
     >
       <div className="flex flex-col items-center leading-tight text-center">
         <div>{table.table_number}</div>
-        {getTodaySummary(table.id) && (
-          <div className="text-[10px] sm:text-xs opacity-90 mt-0.5 text-white/90 px-1">{getTodaySummary(table.id)}</div>
-        )}
       </div>
       {table.status === "occupied" && getServerName(table) && (
         <div className="absolute top-1 right-1 text-[8px] sm:text-[10px] bg-black/50 px-1 py-0.5 rounded text-white/90">
@@ -984,9 +947,6 @@ export default function FloorPlanPage() {
                 }}
               >
                 <span className="leading-tight">{table.table_number}</span>
-                {getTodaySummary(table.id) && (
-                  <span className="text-[8px] sm:text-[10px] opacity-90 leading-tight">{getTodaySummary(table.id)}</span>
-                )}
                 {table.status === "occupied" && getServerName(table) && (
                   <span className="absolute top-0.5 right-0.5 text-[7px] sm:text-[9px] bg-black/50 px-0.5 rounded text-white/90">
                     {getServerName(table)}
