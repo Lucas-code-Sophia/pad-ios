@@ -42,6 +42,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     ]
 
     private let serviceTypes = ["_ipp._tcp.", "_ipps._tcp.", "_printer._tcp.", "_pdl-datastream._tcp."]
+    private let cp437CfEncoding: CFStringEncoding = 0x0400 // DOS Latin US / CP437
     private var discoverySession: PrinterDiscoverySession?
 
     @objc func discoverPrinters(_ call: CAPPluginCall) {
@@ -480,7 +481,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         let folded = text.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "fr_FR"))
         let normalizedEncoding = encodingName.lowercased()
         let cp437Encoding = String.Encoding(
-            rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(kCFStringEncodingDOSLatinUS))
+            rawValue: CFStringConvertEncodingToNSStringEncoding(cp437CfEncoding)
         )
 
         if normalizedEncoding == "cp437" || normalizedEncoding == "ibm437" {

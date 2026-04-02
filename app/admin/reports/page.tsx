@@ -66,6 +66,11 @@ interface ServiceData {
   avg_ticket: number
   avg_duration: number | null
   revenue_per_cover: number | null
+  payment_breakdown: {
+    cash: { amount: number; orders: number }
+    card: { amount: number; orders: number }
+    other: { amount: number; orders: number }
+  }
 }
 
 interface ServerSummary {
@@ -111,6 +116,11 @@ interface ServiceSummaryData {
     covers: number
     avg_ticket: number
     avg_duration: number | null
+    payment_breakdown: {
+      cash: { amount: number; orders: number }
+      card: { amount: number; orders: number }
+      other: { amount: number; orders: number }
+    }
   }
 }
 
@@ -915,6 +925,46 @@ export default function ReportsPage() {
                 </h2>
               </div>
 
+              {/* Cash / CB breakdown */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                <Card className="bg-gradient-to-br from-emerald-900/25 to-emerald-800/20 border-emerald-700/50">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-xs text-emerald-300 uppercase tracking-wide">Cash</div>
+                    <div className="text-2xl font-bold text-white mt-1">
+                      {summaryData.totals.payment_breakdown.cash.amount.toFixed(2)} €
+                    </div>
+                    <div className="text-xs text-emerald-200 mt-1">
+                      {summaryData.totals.payment_breakdown.cash.orders} encaissement
+                      {summaryData.totals.payment_breakdown.cash.orders > 1 ? "s" : ""}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-blue-900/25 to-blue-800/20 border-blue-700/50">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-xs text-blue-300 uppercase tracking-wide">CB</div>
+                    <div className="text-2xl font-bold text-white mt-1">
+                      {summaryData.totals.payment_breakdown.card.amount.toFixed(2)} €
+                    </div>
+                    <div className="text-xs text-blue-200 mt-1">
+                      {summaryData.totals.payment_breakdown.card.orders} encaissement
+                      {summaryData.totals.payment_breakdown.card.orders > 1 ? "s" : ""}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-slate-800/90 to-slate-700/70 border-slate-600/80">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-xs text-slate-300 uppercase tracking-wide">Autres</div>
+                    <div className="text-2xl font-bold text-white mt-1">
+                      {summaryData.totals.payment_breakdown.other.amount.toFixed(2)} €
+                    </div>
+                    <div className="text-xs text-slate-300 mt-1">
+                      {summaryData.totals.payment_breakdown.other.orders} encaissement
+                      {summaryData.totals.payment_breakdown.other.orders > 1 ? "s" : ""}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
               {/* Insights grid */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
                 {summaryData.insights.map((insight, i) => (
@@ -958,6 +1008,18 @@ export default function ReportsPage() {
                         <div className="flex justify-between">
                           <span className="text-slate-400 text-sm">Ticket moyen</span>
                           <span className="text-white">{summaryData.services.midi.avg_ticket.toFixed(2)} €</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400 text-sm">Cash</span>
+                          <span className="text-emerald-300">
+                            {summaryData.services.midi.payment_breakdown.cash.amount.toFixed(2)} €
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400 text-sm">CB</span>
+                          <span className="text-blue-300">
+                            {summaryData.services.midi.payment_breakdown.card.amount.toFixed(2)} €
+                          </span>
                         </div>
                         {summaryData.services.midi.avg_duration && (
                           <div className="flex justify-between">
@@ -1004,6 +1066,18 @@ export default function ReportsPage() {
                         <div className="flex justify-between">
                           <span className="text-slate-400 text-sm">Ticket moyen</span>
                           <span className="text-white">{summaryData.services.soir.avg_ticket.toFixed(2)} €</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400 text-sm">Cash</span>
+                          <span className="text-emerald-300">
+                            {summaryData.services.soir.payment_breakdown.cash.amount.toFixed(2)} €
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-slate-400 text-sm">CB</span>
+                          <span className="text-blue-300">
+                            {summaryData.services.soir.payment_breakdown.card.amount.toFixed(2)} €
+                          </span>
                         </div>
                         {summaryData.services.soir.avg_duration && (
                           <div className="flex justify-between">

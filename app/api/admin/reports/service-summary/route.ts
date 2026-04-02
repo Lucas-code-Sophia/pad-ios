@@ -2,6 +2,14 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
+type PaymentMethod = "cash" | "card" | "other"
+
+const normalizePaymentMethod = (value: unknown): PaymentMethod => {
+  if (value === "cash") return "cash"
+  if (value === "card") return "card"
+  return "other"
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
@@ -108,6 +116,15 @@ export async function GET(request: NextRequest) {
     // ── Build per-service stats ──
     let midiSales = 0, midiOrders = 0, midiCovers = 0, midiDurations: number[] = []
     let soirSales = 0, soirOrders = 0, soirCovers = 0, soirDurations: number[] = []
+    let midiCashAmount = 0, midiCashOrders = 0
+    let midiCardAmount = 0, midiCardOrders = 0
+    let midiOtherAmount = 0, midiOtherOrders = 0
+    let soirCashAmount = 0, soirCashOrders = 0
+    let soirCardAmount = 0, soirCardOrders = 0
+    let soirOtherAmount = 0, soirOtherOrders = 0
+    let totalCashAmount = 0, totalCashOrders = 0
+    let totalCardAmount = 0, totalCardOrders = 0
+    let totalOtherAmount = 0, totalOtherOrders = 0
 
     // ── Top dishes tracking ──
     const dishCountMap: Record<string, { name: string; quantity: number; revenue: number }> = {}
@@ -117,7 +134,7 @@ export async function GET(request: NextRequest) {
       const tableNumber = tableNumberMap.get(order.table_id) || "?"
       const sale = saleByOrder.get(order.id)
       const amount = sale ? Number.parseFloat(sale.total_amount) : 0
-      const paymentMethod = sale?.payment_method || "unknown"
+      const paymentMethod = normalizePaymentMethod(sale?.payment_method)
       const compAmount = sale ? Number.parseFloat(sale.complimentary_amount || 0) : 0
       const compCount = sale ? parseInt(sale.complimentary_count || 0) : 0
 
@@ -137,11 +154,42 @@ export async function GET(request: NextRequest) {
         midiOrders++
         if (order.covers) midiCovers += order.covers
         if (durationMin != null) midiDurations.push(durationMin)
+        if (paymentMethod === "cash") {
+          midiCashAmount += amount
+          midiCashOrders++
+        } else if (paymentMethod === "card") {
+          midiCardAmount += amount
+          midiCardOrders++
+        } else {
+          midiOtherAmount += amount
+          midiOtherOrders++
+        }
       } else {
         soirSales += amount
         soirOrders++
         if (order.covers) soirCovers += order.covers
         if (durationMin != null) soirDurations.push(durationMin)
+        if (paymentMethod === "cash") {
+          soirCashAmount += amount
+          soirCashOrders++
+        } else if (paymentMethod === "card") {
+          soirCardAmount += amount
+          soirCardOrders++
+        } else {
+          soirOtherAmount += amount
+          soirOtherOrders++
+        }
+      }
+
+      if (paymentMethod === "cash") {
+        totalCashAmount += amount
+        totalCashOrders++
+      } else if (paymentMethod === "card") {
+        totalCardAmount += amount
+        totalCardOrders++
+      } else {
+        totalOtherAmount += amount
+        totalOtherOrders++
       }
 
       // Server stats
@@ -219,6 +267,11 @@ export async function GET(request: NextRequest) {
         avg_ticket: midiSales / midiOrders,
         avg_duration: midiAvgDuration,
         revenue_per_cover: midiCovers > 0 ? midiSales / midiCovers : null,
+        payment_breakdown: {
+          cash: { amount: midiCashAmount, orders: midiCashOrders },
+          card: { amount: midiCardAmount, orders: midiCardOrders },
+          other: { amount: midiOtherAmount, orders: midiOtherOrders },
+        },
       } : null,
       soir: soirOrders > 0 ? {
         sales: soirSales,
@@ -227,6 +280,11 @@ export async function GET(request: NextRequest) {
         avg_ticket: soirSales / soirOrders,
         avg_duration: soirAvgDuration,
         revenue_per_cover: soirCovers > 0 ? soirSales / soirCovers : null,
+        payment_breakdown: {
+          cash: { amount: soirCashAmount, orders: soirCashOrders },
+          card: { amount: soirCardAmount, orders: soirCardOrders },
+          other: { amount: soirOtherAmount, orders: soirOtherOrders },
+        },
       } : null,
     }
 
@@ -292,6 +350,11 @@ export async function GET(request: NextRequest) {
         covers: totalCovers,
         avg_ticket: totalOrders > 0 ? totalSales / totalOrders : 0,
         avg_duration: avgDuration,
+        payment_breakdown: {
+          cash: { amount: totalCashAmount, orders: totalCashOrders },
+          card: { amount: totalCardAmount, orders: totalCardOrders },
+          other: { amount: totalOtherAmount, orders: totalOtherOrders },
+        },
       },
     })
   } catch (error) {
@@ -299,4 +362,3 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to fetch service summary" }, { status: 500 })
   }
 }
-

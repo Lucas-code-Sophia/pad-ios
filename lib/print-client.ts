@@ -5,6 +5,7 @@ import {
   getNativeCapacitorPlatform,
   hasNativePrinterBridge,
   isNativeCapacitorRuntime,
+  nativeCheckEscPosPort,
   nativePrintEscPos,
   nativePrintTicket,
   type NativePrinterRole,
@@ -97,6 +98,29 @@ const readNativeEposErrorFromBody = (body?: string): { code?: string; message?: 
   return { code, message }
 }
 
+const isRecoverableDirectEposError = (result: { code?: string; message?: string }) => {
+  const code = String(result.code || "").toLowerCase()
+  const message = String(result.message || "").toLowerCase()
+  if (code === "timeout" || code === "unreachable" || code === "offline") return true
+  return (
+    message.includes("delai depasse") ||
+    message.includes("timed out") ||
+    message.includes("non joignable") ||
+    message.includes("cannot connect") ||
+    message.includes("connection lost")
+  )
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const wakePrinterTcp = async (ip: string) => {
+  try {
+    await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 1200 })
+  } catch {
+    // Best effort wake-up probe only
+  }
+}
+
 const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
   if (!ip) {
     return { ok: false, mode: "direct_epos", message: "IP imprimante manquante" }
@@ -110,11 +134,11 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
       return { ok: false, mode: "direct_epos", message: `Plugin PrinterBridge ${nativeLabel} indisponible.` }
     }
 
-    try {
+    const buildNativeResult = async () => {
       const xml = buildEposXml(ticket)
       const rawNativeResult = await nativePrintTicket({ ip, xml, role: toNativeRole(kind) })
       const nativeBodyError = readNativeEposErrorFromBody(rawNativeResult.body)
-      const nativeResult = nativeBodyError
+      return nativeBodyError
         ? {
             ...rawNativeResult,
             ok: false,
@@ -122,6 +146,16 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
             message: rawNativeResult.message || nativeBodyError.message,
           }
         : rawNativeResult
+    }
+
+    try {
+      await wakePrinterTcp(ip)
+      let nativeResult = await buildNativeResult()
+      if (!nativeResult.ok && isRecoverableDirectEposError(nativeResult)) {
+        await wait(350)
+        await wakePrinterTcp(ip)
+        nativeResult = await buildNativeResult()
+      }
       if (nativeResult.ok) return { ok: true, mode: "direct_epos" }
       const nativeMessage = nativeResult.message || "Échec impression Epson native"
       return { ok: false, mode: "direct_epos", message: nativeMessage }

@@ -11,6 +11,7 @@ const normalizeForSearch = (value: string) =>
     .trim()
 
 const GIN_NOTE_REGEX = /^gin\s*:\s*(.+)$/i
+const GIN_SURCHARGE_SUFFIX_REGEX = /\s*\(\+\s*[\d.,]+\s*€\s*\)\s*$/i
 
 const parseNoteLines = (note?: string | null) =>
   String(note || "")
@@ -21,7 +22,9 @@ const parseNoteLines = (note?: string | null) =>
 const buildDisplayName = (baseName: string, ginVariant?: string) => {
   if (!ginVariant) return baseName
   if (!normalizeForSearch(baseName).includes("gin tonic")) return baseName
-  return `${baseName} - ${ginVariant}`
+  const cleanGinVariant = ginVariant.replace(GIN_SURCHARGE_SUFFIX_REGEX, "").trim()
+  if (!cleanGinVariant) return baseName
+  return `${baseName} - ${cleanGinVariant}`
 }
 
 export const getItemDisplayInfo = (baseName: string, note?: string | null): ItemDisplayInfo => {
