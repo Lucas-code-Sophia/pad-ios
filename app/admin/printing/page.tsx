@@ -54,25 +54,17 @@ export default function PrintingSettingsPage() {
         setBarIp(data.bar_ip || "")
         setCaisseIp(data.caisse_ip || "")
         const modeFromDb: PrintMode =
-          data.print_mode === "direct_epos" || data.print_mode === "airprint" ? data.print_mode : "server"
-        const effectiveMode = isNativeCapacitorRuntime() && modeFromDb === "server" ? "direct_epos" : modeFromDb
-        setPrintMode(effectiveMode)
+          data.print_mode === "direct_epos" || data.print_mode === "escpos_tcp" ? data.print_mode : "server"
+        setPrintMode(modeFromDb)
       }
     } catch (error) {
       console.error("[v0] Error fetching print settings:", error)
     }
   }
 
-  useEffect(() => {
-    if (isNativeCapacitor && printMode === "server") {
-      setPrintMode("direct_epos")
-    }
-  }, [isNativeCapacitor, printMode])
-
   const savePrintSettings = async () => {
     try {
       setSavingPrint(true)
-      const effectivePrintMode: PrintMode = isNativeCapacitor && printMode === "server" ? "direct_epos" : printMode
       const res = await fetch("/api/admin/print-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -80,7 +72,7 @@ export default function PrintingSettingsPage() {
           kitchen_ip: kitchenIp,
           bar_ip: barIp,
           caisse_ip: caisseIp,
-          print_mode: effectivePrintMode,
+          print_mode: printMode,
         }),
       })
       if (!res.ok) {
@@ -222,15 +214,23 @@ export default function PrintingSettingsPage() {
                   onChange={(e) => setPrintMode(e.target.value as PrintMode)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
                 >
-                  {!isNativeCapacitor && <option value="server">Serveur (Vercel)</option>}
+                  <option value="server">Serveur (Vercel)</option>
                   <option value="direct_epos">Direct Epson (LAN local)</option>
-                  <option value="airprint">Impression systeme (AirPrint / Android)</option>
+                  <option value="escpos_tcp">ESC/POS TCP (9100)</option>
                 </select>
-                <p className="text-xs text-slate-400 mt-1">
-                  {isNativeCapacitor
-                    ? "Mode app native: Epson LAN local avec fallback impression systeme."
-                    : "Direct Epson et AirPrint doivent etre lances depuis un appareil sur le Wi-Fi local du restaurant."}
-                </p>
+                <div className="text-xs text-slate-400 mt-1 space-y-1">
+                  <p>Reglage global partage: ce mode s'applique a tous les pads de l'equipe.</p>
+                  {printMode === "escpos_tcp" ? (
+                    <>
+                      <p>ESC/POS TCP: port fixe 9100, encodage CP437, sans fallback.</p>
+                      <p>Mode disponible uniquement dans l'app native iOS/Android.</p>
+                    </>
+                  ) : isNativeCapacitor ? (
+                    <p>Mode app native actif. Les tests partent en LAN local selon le mode choisi.</p>
+                  ) : (
+                    <p>Direct Epson doit etre lance depuis un appareil sur le Wi-Fi local du restaurant.</p>
+                  )}
+                </div>
               </div>
               {isNativeCapacitor && (
                 <div className="rounded-md border border-slate-600 bg-slate-900/50 p-3 space-y-2">

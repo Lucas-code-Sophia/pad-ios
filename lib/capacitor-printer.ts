@@ -22,6 +22,15 @@ type PrinterBridgePlugin = {
   discoverPrinters: (options?: { timeoutMs?: number }) => Promise<{ printers?: Array<Partial<DiscoveredNativePrinter>> }>
   printTicket: (payload: { ip: string; xml: string; role: NativePrinterRole }) => Promise<NativeBridgeResult>
   getPrinterStatus: (payload: { ip: string }) => Promise<NativeBridgeResult & { reachable?: boolean }>
+  printEscPos: (payload: {
+    ip: string
+    port?: number
+    lines: string[]
+    cut?: boolean
+    encoding?: string
+    timeoutMs?: number
+  }) => Promise<NativeBridgeResult>
+  checkEscPosPort: (payload: { ip: string; port?: number; timeoutMs?: number }) => Promise<NativeBridgeResult & { reachable?: boolean }>
   printAirPrint: (payload: { html: string; jobName?: string }) => Promise<NativeBridgeResult>
 }
 
@@ -167,6 +176,70 @@ export async function nativeGetPrinterStatus(payload: { ip: string }): Promise<{
 
   try {
     const result = await bridge.getPrinterStatus(payload)
+    const normalized = normalizeNativeResult(result)
+    return {
+      ...normalized,
+      reachable: result?.reachable === true,
+    }
+  } catch (error) {
+    return { ok: false, reachable: false, code: "unknown", message: toMessage(error) }
+  }
+}
+
+export async function nativePrintEscPos(payload: {
+  ip: string
+  port?: number
+  lines: string[]
+  cut?: boolean
+  encoding?: string
+  timeoutMs?: number
+}): Promise<{
+  ok: boolean
+  code?: string
+  message?: string
+  status?: number
+  body?: string
+}> {
+  const platform = getNativeCapacitorPlatform()
+  const bridge = getBridge()
+  if (!bridge?.printEscPos) {
+    return {
+      ok: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.`,
+    }
+  }
+
+  try {
+    return normalizeNativeResult(await bridge.printEscPos(payload))
+  } catch (error) {
+    return { ok: false, code: "unknown", message: toMessage(error) }
+  }
+}
+
+export async function nativeCheckEscPosPort(payload: {
+  ip: string
+  port?: number
+  timeoutMs?: number
+}): Promise<{
+  ok: boolean
+  reachable: boolean
+  code?: string
+  message?: string
+}> {
+  const platform = getNativeCapacitorPlatform()
+  const bridge = getBridge()
+  if (!bridge?.checkEscPosPort) {
+    return {
+      ok: false,
+      reachable: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge (${getNativeRuntimeLabel(platform)}) indisponible.`,
+    }
+  }
+
+  try {
+    const result = await bridge.checkEscPosPort(payload)
     const normalized = normalizeNativeResult(result)
     return {
       ...normalized,

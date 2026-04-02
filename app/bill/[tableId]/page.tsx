@@ -15,6 +15,7 @@ import {
   type TicketPrintLine,
   type TicketTaxRow,
 } from "@/lib/ticket-layout"
+import { getItemDisplayInfo } from "@/lib/item-display"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -488,7 +489,7 @@ export default function BillPage() {
       return
     }
 
-    const itemName = item.menu_item?.name || "cet article"
+    const itemName = getItemDisplayInfo(item.menu_item?.name || "cet article", item.notes).displayName
     const shouldDelete = confirm(`Supprimer ${item.quantity}x ${itemName} de la commande ?`)
     if (!shouldDelete) return
 
@@ -716,13 +717,16 @@ export default function BillPage() {
   }
 
   const getBillLineItems = (): TicketItemRow[] => {
-    const itemLines = items.map((item) => ({
-      flag: getToFollowLabel(item.status),
-      label: `${item.quantity} ${item.menu_item?.name || "Article"}`,
-      amount: item.is_complimentary ? 0 : Number(item.price || 0) * Number(item.quantity || 0),
-      complimentary: item.is_complimentary,
-      note: item.notes || undefined,
-    }))
+    const itemLines = items.map((item) => {
+      const { displayName, displayNote } = getItemDisplayInfo(item.menu_item?.name || "Article", item.notes)
+      return {
+        flag: getToFollowLabel(item.status),
+        label: `${item.quantity} ${displayName}`,
+        amount: item.is_complimentary ? 0 : Number(item.price || 0) * Number(item.quantity || 0),
+        complimentary: item.is_complimentary,
+        note: displayNote,
+      }
+    })
 
     const supplementLines = supplements.map((supplement) => ({
       label: `+ 1 ${supplement.name}`,
@@ -1242,6 +1246,7 @@ export default function BillPage() {
                 const rowId = `item:${item.id}`
                 const isSwiped = swipedBillRowId === rowId
                 const canDeleteBillRow = item.paid_quantity === 0
+                const { displayName, displayNote } = getItemDisplayInfo(item.menu_item?.name || "Article", item.notes)
 
                 return (
                   <div key={item.id} className="group relative overflow-hidden rounded">
@@ -1317,7 +1322,7 @@ export default function BillPage() {
                             <p
                               className={`text-white font-medium text-sm sm:text-base ${isFullyPaid || item.is_complimentary ? "line-through text-slate-500" : ""}`}
                             >
-                              {item.quantity}x {item.menu_item?.name}
+                              {item.quantity}x {displayName}
                             </p>
                             {item.is_complimentary && (
                               <Badge className="bg-green-600 text-xs flex items-center gap-1">
@@ -1342,6 +1347,7 @@ export default function BillPage() {
                           {item.is_complimentary && item.complimentary_reason && (
                             <p className="text-xs text-green-400 italic">{item.complimentary_reason}</p>
                           )}
+                          {displayNote && <p className="text-xs text-slate-400 italic">{displayNote}</p>}
                         </div>
                       </div>
                       <div className="text-right flex-shrink-0">
@@ -1360,7 +1366,7 @@ export default function BillPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => handleOfferPartial(item.id, item.menu_item?.name || "", remainingQty, item.price)}
+                            onClick={() => handleOfferPartial(item.id, displayName, remainingQty, item.price)}
                             className="bg-green-600 hover:bg-green-700 border-green-500 text-white h-6 w-6 p-0 mt-1"
                             title={`Offrir une partie (${remainingQty} disponible${remainingQty > 1 ? "s" : ""})`}
                           >

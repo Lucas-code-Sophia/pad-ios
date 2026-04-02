@@ -140,4 +140,11 @@ Table 7 - Serveur A
 ### 🎨 Thèmes personnalisables
 - Couleurs de l'interface selon le restaurant (si vente de l'app)
 
+### 🖨️ Plan resynchronisation imprimantes (en pause)
+- Ajouter un écran de contrôle simple depuis le floor plan pour vérifier Cuisine/Bar/Caisse sur ce pad.
+- Vérifier la connectivité des 3 imprimantes configurées et afficher un statut clair (OK/KO) par poste.
+- Proposer une action "Re-synchroniser les imprimantes" (détection + réaffectation rapide) quand un poste est KO.
+- Message opérateur prévu si KO: se rapprocher de la zone imprimantes, relancer la détection, puis valider.
+- Aucun changement activé pour l'instant: plan gardé en backlog pour reprise ultérieure.
+
 **Ajouté le**: 2026-02-19

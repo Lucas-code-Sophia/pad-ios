@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
-const normalizePrintMode = (value: unknown): "server" | "direct_epos" | "airprint" => {
+const normalizePrintMode = (value: unknown): "server" | "direct_epos" | "escpos_tcp" => {
   if (value === "direct_epos") return "direct_epos"
-  if (value === "airprint") return "airprint"
+  if (value === "escpos_tcp") return "escpos_tcp"
+  if (value === "airprint") return "direct_epos"
   return "server"
 }
 

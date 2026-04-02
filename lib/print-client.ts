@@ -5,15 +5,15 @@ import {
   getNativeCapacitorPlatform,
   hasNativePrinterBridge,
   isNativeCapacitorRuntime,
-  nativePrintAirPrint,
+  nativePrintEscPos,
   nativePrintTicket,
   type NativePrinterRole,
 } from "@/lib/capacitor-printer"
 
 export type PrintKind = "bar" | "kitchen" | "suites" | "caisse"
-export type PrintMode = "server" | "direct_epos" | "airprint"
+export type PrintMode = "server" | "direct_epos" | "escpos_tcp"
 
-type PrintSettings = {
+export type PrintSettings = {
   kitchen_ip: string
   bar_ip: string
   caisse_ip: string
@@ -28,94 +28,14 @@ export type PrintResult = {
 
 const normalizePrintMode = (value: unknown): PrintMode => {
   if (value === "direct_epos") return "direct_epos"
-  if (value === "airprint") return "airprint"
+  if (value === "escpos_tcp") return "escpos_tcp"
+  if (value === "airprint") return "direct_epos"
   return "server"
 }
 
 const toNativeRole = (kind: PrintKind): NativePrinterRole => kind
 
-const escapeHtml = (value: string) =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
-
-const AIRPRINT_BASE_FONT_SIZE = 13
-
-const resolveAirPrintLineScale = (line: EposTicket["lines"][number]): number => {
-  if (typeof line.fontScale === "number" && Number.isFinite(line.fontScale) && line.fontScale > 0) {
-    return line.fontScale
-  }
-
-  const widthScale = typeof line.width === "number" && Number.isFinite(line.width) ? line.width : 1
-  const heightScale = typeof line.height === "number" && Number.isFinite(line.height) ? line.height : 1
-  return Math.max(1, widthScale, heightScale)
-}
-
-const buildAirPrintHtml = (ticket: EposTicket) => {
-  const linesHtml = ticket.lines
-    .map((line) => {
-      const alignClass = line.align === "center" ? "center" : line.align === "right" ? "right" : "left"
-      const weightClass = line.bold ? "bold" : ""
-      const scale = resolveAirPrintLineScale(line)
-      const sizeStyle =
-        scale !== 1
-          ? ` style="font-size:${(AIRPRINT_BASE_FONT_SIZE * scale).toFixed(2)}px;line-height:1.35;"`
-          : ""
-      return `<div class="line ${alignClass} ${weightClass}"${sizeStyle}>${escapeHtml(line.content)}</div>`
-    })
-    .join("")
-
-  const title = ticket.title ? `<h1>${escapeHtml(ticket.title)}</h1>` : ""
-
-  return `<!doctype html>
-<html lang="fr">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Impression Ticket</title>
-    <style>
-      @page { size: 80mm auto; margin: 4mm; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        padding: 0;
-        font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-        color: #111827;
-      }
-      .ticket {
-        width: 72mm;
-        margin: 0 auto;
-        font-size: ${AIRPRINT_BASE_FONT_SIZE}px;
-        line-height: 1.4;
-        white-space: pre-wrap;
-      }
-      h1 {
-        margin: 0 0 8px 0;
-        font-size: 16px;
-        text-align: center;
-      }
-      .line { margin: 0; }
-      .line.left { text-align: left; }
-      .line.center { text-align: center; }
-      .line.right { text-align: right; }
-      .line.bold { font-weight: 700; }
-    </style>
-  </head>
-  <body>
-    <main class="ticket">
-      ${title}
-      ${linesHtml}
-    </main>
-    <script>
-      setTimeout(function () { window.print(); }, 200);
-      window.onafterprint = function () { window.close(); };
-    </script>
-  </body>
-</html>`
-}
+const DEFAULT_PRINT_SETTINGS: PrintSettings = { kitchen_ip: "", bar_ip: "", caisse_ip: "", print_mode: "server" }
 
 const fetchPrintSettings = async (): Promise<PrintSettings> => {
   const response = await fetch("/api/admin/print-settings", {
@@ -136,6 +56,14 @@ const fetchPrintSettings = async (): Promise<PrintSettings> => {
   }
 }
 
+export const getConfiguredPrintSettings = async (): Promise<PrintSettings> => {
+  try {
+    return await fetchPrintSettings()
+  } catch {
+    return DEFAULT_PRINT_SETTINGS
+  }
+}
+
 const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<PrintResult> => {
   const response = await fetch("/api/print", {
     method: "POST",
@@ -153,20 +81,6 @@ const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<Prin
   }
 
   return { ok: true, mode: "server" }
-}
-
-const runNativeAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
-  if (!hasNativePrinterBridge()) {
-    return { ok: false, mode: "airprint", message: "Plugin impression native indisponible." }
-  }
-
-  const response = await nativePrintAirPrint({
-    html: buildAirPrintHtml(ticket),
-    jobName: kind ? `SophiaPad ${kind.toUpperCase()}` : "SophiaPad Ticket",
-  })
-
-  if (response.ok) return { ok: true, mode: "airprint" }
-  return { ok: false, mode: "airprint", message: response.message || "Echec impression systeme native" }
 }
 
 const readNativeEposErrorFromBody = (body?: string): { code?: string; message?: string } | null => {
@@ -193,14 +107,6 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
     const nativeLabel = nativePlatform === "android" ? "Android" : "iOS"
 
     if (!hasNativePrinterBridge()) {
-      const fallbackNoBridge = await runAirPrint(ticket, kind)
-      if (fallbackNoBridge.ok) {
-        return {
-          ok: true,
-          mode: "airprint",
-          message: `Plugin Epson ${nativeLabel} indisponible, fallback impression système lancé.`,
-        }
-      }
       return { ok: false, mode: "direct_epos", message: `Plugin PrinterBridge ${nativeLabel} indisponible.` }
     }
 
@@ -217,32 +123,11 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
           }
         : rawNativeResult
       if (nativeResult.ok) return { ok: true, mode: "direct_epos" }
-
-      const fallback = await runNativeAirPrint(ticket, kind)
-      if (fallback.ok) {
-        return {
-          ok: true,
-          mode: "airprint",
-          message: nativeResult.message
-            ? `Epson indisponible (${nativeResult.message}), fallback impression systeme lance.`
-            : "Epson indisponible, fallback impression systeme lance.",
-        }
-      }
-
       const nativeMessage = nativeResult.message || "Échec impression Epson native"
-      const fallbackMessage = fallback.message ? ` Fallback impression systeme: ${fallback.message}` : ""
-      return { ok: false, mode: "direct_epos", message: `${nativeMessage}.${fallbackMessage}`.trim() }
+      return { ok: false, mode: "direct_epos", message: nativeMessage }
     } catch (error) {
       const nativeMessage = error instanceof Error ? error.message : "Échec impression Epson native"
-      const fallback = await runNativeAirPrint(ticket, kind)
-      if (fallback.ok) {
-        return {
-          ok: true,
-          mode: "airprint",
-          message: `Epson indisponible (${nativeMessage}), fallback impression systeme lance.`,
-        }
-      }
-      return { ok: false, mode: "direct_epos", message: `${nativeMessage}. Fallback impression systeme echoue.` }
+      return { ok: false, mode: "direct_epos", message: nativeMessage }
     }
   }
 
@@ -269,25 +154,59 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
   }
 }
 
-const runAirPrint = async (ticket: EposTicket, kind?: PrintKind): Promise<PrintResult> => {
-  if (isNativeCapacitorRuntime() && hasNativePrinterBridge()) {
-    return runNativeAirPrint(ticket, kind)
+const toEscPosLines = (ticket: EposTicket): string[] => {
+  const lines: string[] = []
+  if (ticket.title) {
+    lines.push(ticket.title)
+    lines.push("")
+  }
+  for (const line of ticket.lines) {
+    lines.push(line.content)
+  }
+  return lines
+}
+
+const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
+  if (!ip) {
+    return { ok: false, mode: "escpos_tcp", message: "IP imprimante manquante" }
   }
 
-  if (typeof window === "undefined") {
-    return { ok: false, mode: "airprint", message: "Impression systeme indisponible sur ce terminal" }
+  if (!isNativeCapacitorRuntime()) {
+    return {
+      ok: false,
+      mode: "escpos_tcp",
+      message: "Mode ESC/POS TCP (9100) disponible uniquement dans l'app native iOS/Android.",
+    }
   }
 
-  const popup = window.open("", "_blank", "noopener,noreferrer")
-  if (!popup) {
-    return { ok: false, mode: "airprint", message: "Autorise les popups pour lancer l'impression systeme" }
+  const nativePlatform = getNativeCapacitorPlatform()
+  const nativeLabel = nativePlatform === "android" ? "Android" : "iOS"
+  if (!hasNativePrinterBridge()) {
+    return {
+      ok: false,
+      mode: "escpos_tcp",
+      message: `Plugin PrinterBridge ${nativeLabel} indisponible.`,
+    }
   }
 
-  popup.document.open()
-  popup.document.write(buildAirPrintHtml(ticket))
-  popup.document.close()
-
-  return { ok: true, mode: "airprint" }
+  try {
+    const nativeResult = await nativePrintEscPos({
+      ip,
+      port: 9100,
+      lines: toEscPosLines(ticket),
+      cut: true,
+      encoding: "cp437",
+    })
+    if (nativeResult.ok) return { ok: true, mode: "escpos_tcp" }
+    return {
+      ok: false,
+      mode: "escpos_tcp",
+      message: nativeResult.message || "Echec impression ESC/POS TCP",
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Echec impression ESC/POS TCP"
+    return { ok: false, mode: "escpos_tcp", message }
+  }
 }
 
 type PrintTicketParams = {
@@ -301,24 +220,18 @@ export async function printTicketWithConfiguredMode(params: PrintTicketParams): 
   const { kind, modeOverride, ipOverride } = params
   const ticket = params.ticket || sampleTicket(kind)
 
-  let settings: PrintSettings = { kitchen_ip: "", bar_ip: "", caisse_ip: "", print_mode: "server" }
-  try {
-    settings = await fetchPrintSettings()
-  } catch {
-    // Fallback server mode if settings endpoint is unavailable
-  }
+  const settings = await getConfiguredPrintSettings()
 
   const mode = modeOverride || settings.print_mode
   const ipFromSettings =
     kind === "bar" ? settings.bar_ip : kind === "caisse" || kind === "suites" ? settings.caisse_ip : settings.kitchen_ip
   const resolvedIp = ipOverride || ipFromSettings
 
-  if (mode === "airprint") {
-    return runAirPrint(ticket, kind)
-  }
-
   if (mode === "direct_epos") {
     return runDirectEposPrint(kind, resolvedIp, ticket)
+  }
+  if (mode === "escpos_tcp") {
+    return runEscPosPrint(kind, resolvedIp, ticket)
   }
 
   return runServerPrint(kind, ticket)

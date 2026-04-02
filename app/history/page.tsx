@@ -18,6 +18,7 @@ import {
   type TicketItemRow,
   type TicketTaxRow,
 } from "@/lib/ticket-layout"
+import { getItemDisplayInfo } from "@/lib/item-display"
 
 interface ServerStats {
   server_id: string
@@ -297,13 +298,16 @@ export default function HistoryPage() {
       }, 0)
 
     const rows: TicketItemRow[] = [
-      ...transactionDetail.items.map((item) => ({
-        label: `${item.quantity} ${item.menu_name}`,
-        amount: item.is_complimentary ? 0 : Number(item.line_total || 0),
-        complimentary: item.is_complimentary,
-        note: item.notes || undefined,
-        flag: getToFollowLabel(item.status),
-      })),
+      ...transactionDetail.items.map((item) => {
+        const { displayName, displayNote } = getItemDisplayInfo(item.menu_name, item.notes)
+        return {
+          label: `${item.quantity} ${displayName}`,
+          amount: item.is_complimentary ? 0 : Number(item.line_total || 0),
+          complimentary: item.is_complimentary,
+          note: displayNote,
+          flag: getToFollowLabel(item.status),
+        }
+      }),
       ...transactionDetail.supplements.map((supplement) => ({
         label: `+ 1 ${supplement.name}`,
         amount: supplement.is_complimentary ? 0 : Number(supplement.amount || 0),
@@ -773,27 +777,30 @@ export default function HistoryPage() {
                 <h3 className="text-sm font-semibold text-slate-300 mb-2">Détail de la commande</h3>
                 <div className="space-y-2">
                   {transactionDetail.items.length > 0 ? (
-                    transactionDetail.items.map((item) => (
-                      <div key={item.id} className="bg-slate-900 border border-slate-700 rounded p-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-sm text-white">
-                            {item.quantity} x {item.menu_name}
-                          </p>
-                          <p className={`text-sm font-semibold ${item.is_complimentary ? "text-slate-500 line-through" : "text-white"}`}>
-                            {(item.is_complimentary ? 0 : item.line_total).toFixed(2)} €
-                          </p>
-                        </div>
-                        <div className="text-xs text-slate-400 mt-1">
-                          Prix unit.: {Number(item.price).toFixed(2)} € • Statut: {item.status}
-                        </div>
-                        {item.notes && <div className="text-xs text-slate-400 italic mt-1">Note: {item.notes}</div>}
-                        {item.is_complimentary && (
-                          <div className="text-xs text-green-400 mt-1">
-                            Offert{item.complimentary_reason ? ` • ${item.complimentary_reason}` : ""}
+                    transactionDetail.items.map((item) => {
+                      const { displayName, displayNote } = getItemDisplayInfo(item.menu_name, item.notes)
+                      return (
+                        <div key={item.id} className="bg-slate-900 border border-slate-700 rounded p-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm text-white">
+                              {item.quantity} x {displayName}
+                            </p>
+                            <p className={`text-sm font-semibold ${item.is_complimentary ? "text-slate-500 line-through" : "text-white"}`}>
+                              {(item.is_complimentary ? 0 : item.line_total).toFixed(2)} €
+                            </p>
                           </div>
-                        )}
-                      </div>
-                    ))
+                          <div className="text-xs text-slate-400 mt-1">
+                            Prix unit.: {Number(item.price).toFixed(2)} € • Statut: {item.status}
+                          </div>
+                          {displayNote && <div className="text-xs text-slate-400 italic mt-1">Note: {displayNote}</div>}
+                          {item.is_complimentary && (
+                            <div className="text-xs text-green-400 mt-1">
+                              Offert{item.complimentary_reason ? ` • ${item.complimentary_reason}` : ""}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })
                   ) : (
                     <p className="text-xs text-slate-400">Aucun article trouvé.</p>
                   )}

@@ -19,14 +19,18 @@ import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
+import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.net.URL
 import java.net.UnknownHostException
+import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -241,6 +245,74 @@ class PrinterBridgePlugin : Plugin() {
     }
 
     @PluginMethod
+    fun printEscPos(call: PluginCall) {
+        val ip = call.getString("ip")?.trim().orEmpty()
+        val timeoutMs = max(call.getInt("timeoutMs") ?: 7000, 1000)
+        val cut = call.getBoolean("cut") ?: true
+        val encodingName = (call.getString("encoding") ?: "cp437").trim().ifBlank { "cp437" }
+        val linesArray = call.getArray("lines")
+        val lines = mutableListOf<String>()
+        if (linesArray != null) {
+            for (index in 0 until linesArray.length()) {
+                val line = linesArray.optString(index, "").trimEnd()
+                lines.add(line)
+            }
+        }
+
+        if (ip.isEmpty()) {
+            call.resolve(errorResult("invalid_args", "IP imprimante manquante."))
+            return
+        }
+        if (lines.isEmpty()) {
+            call.resolve(errorResult("invalid_args", "Lignes ESC/POS manquantes."))
+            return
+        }
+
+        bridge.execute {
+            try {
+                Socket().use { socket ->
+                    socket.tcpNoDelay = true
+                    socket.soTimeout = timeoutMs
+                    socket.connect(InetSocketAddress(ip, 9100), timeoutMs)
+
+                    val payload = buildEscPosPayload(lines, cut, encodingName)
+                    socket.getOutputStream().use { output ->
+                        output.write(payload)
+                        output.flush()
+                    }
+                }
+                call.resolve(JSObject().put("ok", true))
+            } catch (error: Throwable) {
+                val mapped = mapNetworkError(error)
+                call.resolve(errorResult(mapped.first, mapped.second))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun checkEscPosPort(call: PluginCall) {
+        val ip = call.getString("ip")?.trim().orEmpty()
+        val timeoutMs = max(call.getInt("timeoutMs") ?: 4000, 1000)
+        if (ip.isEmpty()) {
+            call.resolve(errorResult("invalid_args", "IP imprimante manquante.").put("reachable", false))
+            return
+        }
+
+        bridge.execute {
+            try {
+                Socket().use { socket ->
+                    socket.soTimeout = timeoutMs
+                    socket.connect(InetSocketAddress(ip, 9100), timeoutMs)
+                }
+                call.resolve(JSObject().put("ok", true).put("reachable", true))
+            } catch (error: Throwable) {
+                val mapped = mapNetworkError(error)
+                call.resolve(errorResult(mapped.first, mapped.second).put("reachable", false))
+            }
+        }
+    }
+
+    @PluginMethod
     fun printAirPrint(call: PluginCall) {
         val html = call.getString("html").orEmpty()
         val jobName = call.getString("jobName") ?: "SophiaPad Ticket"
@@ -339,6 +411,30 @@ class PrinterBridgePlugin : Plugin() {
             "autocuttererror" -> "Erreur autocutter imprimante.$suffix"
             "mechanicalerror" -> "Erreur mecanique imprimante.$suffix"
             else -> "Impression Epson echouee (${code ?: "epos_error"}).$suffix"
+        }
+    }
+
+    private fun buildEscPosPayload(lines: List<String>, cut: Boolean, encodingName: String): ByteArray {
+        val charset = resolveEscPosCharset(encodingName)
+        val output = ByteArrayOutputStream()
+        output.write(byteArrayOf(0x1B.toByte(), 0x40.toByte())) // ESC @ init
+        lines.forEach { line ->
+            output.write(line.toByteArray(charset))
+            output.write(byteArrayOf(0x0A.toByte()))
+        }
+        if (cut) {
+            output.write(byteArrayOf(0x1D.toByte(), 0x56.toByte(), 0x41.toByte(), 0x00.toByte())) // GS V A 0
+        }
+        return output.toByteArray()
+    }
+
+    private fun resolveEscPosCharset(encodingName: String): Charset {
+        val normalized = encodingName.lowercase(Locale.ROOT)
+        val target = if (normalized == "cp437" || normalized == "ibm437") "CP437" else encodingName
+        return try {
+            Charset.forName(target)
+        } catch (_: Exception) {
+            Charset.forName("CP437")
         }
     }
 

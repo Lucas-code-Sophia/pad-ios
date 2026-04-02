@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import {
   discoverNativePrinters,
   isNativeCapacitorRuntime,
+  nativeCheckEscPosPort,
   nativeGetPrinterStatus,
   type DiscoveredNativePrinter,
 } from "@/lib/capacitor-printer"
@@ -74,12 +75,16 @@ export default function PrinterSyncPage() {
     }
   }, [])
 
-  const runConnectivityCheck = async (overrides?: { kitchen: string; bar: string; caisse: string }) => {
+  const runConnectivityCheck = async (
+    overrides?: { kitchen: string; bar: string; caisse: string },
+    modeOverride?: PrintMode,
+  ) => {
     const targetIps = overrides || {
       kitchen: kitchenIp,
       bar: barIp,
       caisse: caisseIp,
     }
+    const activeMode = modeOverride || printMode
 
     setCheckingAll(true)
     setPrinterStatuses({
@@ -115,13 +120,16 @@ export default function PrinterSyncPage() {
             ] as const
           }
 
-          const result = await nativeGetPrinterStatus({ ip })
+          const result =
+            activeMode === "escpos_tcp"
+              ? await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 4000 })
+              : await nativeGetPrinterStatus({ ip })
           if (result.ok && result.reachable) {
             return [
               role,
               {
                 reachable: true,
-                message: "Connectee",
+                message: activeMode === "escpos_tcp" ? "Connectee (TCP 9100)" : "Connectee",
                 checking: false,
               },
             ] as const
@@ -171,13 +179,13 @@ export default function PrinterSyncPage() {
         caisse: String(data?.caisse_ip || ""),
       }
       const modeFromApi: PrintMode =
-        data?.print_mode === "direct_epos" || data?.print_mode === "airprint" ? data.print_mode : "server"
+        data?.print_mode === "direct_epos" || data?.print_mode === "escpos_tcp" ? data.print_mode : "server"
 
       setKitchenIp(nextIps.kitchen)
       setBarIp(nextIps.bar)
       setCaisseIp(nextIps.caisse)
       setPrintMode(modeFromApi)
-      await runConnectivityCheck(nextIps)
+      await runConnectivityCheck(nextIps, modeFromApi)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Echec de chargement"
       setScanMessage(message)
@@ -407,6 +415,14 @@ export default function PrinterSyncPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
+            <p className="text-xs text-slate-400">
+              Mode global actif:{" "}
+              {printMode === "escpos_tcp"
+                ? "ESC/POS TCP (9100)"
+                : printMode === "direct_epos"
+                  ? "Direct Epson (LAN local)"
+                  : "Serveur (Vercel)"}
+            </p>
             <div>
               <Label className="text-slate-300 text-sm">Cuisine</Label>
               <Input

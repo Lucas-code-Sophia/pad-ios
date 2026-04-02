@@ -2,6 +2,7 @@ import UIKit
 import Capacitor
 import Foundation
 import Darwin
+import CoreFoundation
 
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
@@ -35,6 +36,8 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "discoverPrinters", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "printTicket", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getPrinterStatus", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "printEscPos", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "checkEscPosPort", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "printAirPrint", returnType: CAPPluginReturnPromise)
     ]
 
@@ -201,6 +204,85 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         }.resume()
     }
 
+    @objc func printEscPos(_ call: CAPPluginCall) {
+        guard let ip = call.getString("ip"), !ip.isEmpty else {
+            resolve(call, data: [
+                "ok": false,
+                "code": "invalid_args",
+                "message": "IP imprimante manquante."
+            ])
+            return
+        }
+
+        let rawLines = call.getArray("lines", String.self) ?? []
+        if rawLines.isEmpty {
+            resolve(call, data: [
+                "ok": false,
+                "code": "invalid_args",
+                "message": "Lignes ESC/POS manquantes."
+            ])
+            return
+        }
+
+        let timeoutMs = max(call.getInt("timeoutMs") ?? 7000, 1000)
+        let cut = call.getBool("cut") ?? true
+        let encoding = call.getString("encoding") ?? "cp437"
+        let port = 9100
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let output = try self.openEscPosOutputStream(host: ip, port: port, timeoutMs: timeoutMs)
+                defer { output.close() }
+
+                let payload = self.buildEscPosPayload(lines: rawLines, cut: cut, encodingName: encoding)
+                try self.writeEscPosData(payload, to: output, timeoutMs: timeoutMs)
+
+                self.resolve(call, data: ["ok": true])
+            } catch {
+                let mapped = self.mapEscPosStreamError(error)
+                self.resolve(call, data: [
+                    "ok": false,
+                    "code": mapped.code,
+                    "message": mapped.message
+                ])
+            }
+        }
+    }
+
+    @objc func checkEscPosPort(_ call: CAPPluginCall) {
+        guard let ip = call.getString("ip"), !ip.isEmpty else {
+            resolve(call, data: [
+                "ok": false,
+                "reachable": false,
+                "code": "invalid_args",
+                "message": "IP imprimante manquante."
+            ])
+            return
+        }
+
+        let timeoutMs = max(call.getInt("timeoutMs") ?? 4000, 1000)
+        let port = 9100
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let output = try self.openEscPosOutputStream(host: ip, port: port, timeoutMs: timeoutMs)
+                output.close()
+                self.resolve(call, data: [
+                    "ok": true,
+                    "reachable": true
+                ])
+            } catch {
+                let mapped = self.mapEscPosStreamError(error)
+                self.resolve(call, data: [
+                    "ok": false,
+                    "reachable": false,
+                    "code": mapped.code,
+                    "message": mapped.message
+                ])
+            }
+        }
+    }
+
     @objc func printAirPrint(_ call: CAPPluginCall) {
         let html = call.getString("html") ?? ""
         let jobName = call.getString("jobName") ?? "SophiaPad Ticket"
@@ -321,6 +403,103 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         default:
             return ("unknown", urlError.localizedDescription)
         }
+    }
+
+    private func openEscPosOutputStream(host: String, port: Int, timeoutMs: Int) throws -> OutputStream {
+        var readStream: Unmanaged<CFReadStream>?
+        var writeStream: Unmanaged<CFWriteStream>?
+        CFStreamCreatePairWithSocketToHost(nil, host as CFString, UInt32(port), &readStream, &writeStream)
+
+        guard let writable = writeStream?.takeRetainedValue() else {
+            throw NSError(domain: "PrinterBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Flux TCP indisponible."])
+        }
+
+        let output = writable as OutputStream
+        output.open()
+
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
+        while output.streamStatus == .opening && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+
+        if output.streamStatus != .open {
+            let message = output.streamError?.localizedDescription ?? "Imprimante non joignable sur TCP 9100."
+            output.close()
+            throw NSError(domain: "PrinterBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+
+        return output
+    }
+
+    private func writeEscPosData(_ data: Data, to output: OutputStream, timeoutMs: Int) throws {
+        let bytes = [UInt8](data)
+        var offset = 0
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
+
+        while offset < bytes.count {
+            if output.hasSpaceAvailable {
+                let written = bytes.withUnsafeBufferPointer { buffer -> Int in
+                    guard let base = buffer.baseAddress else { return -1 }
+                    return output.write(base.advanced(by: offset), maxLength: bytes.count - offset)
+                }
+
+                if written <= 0 {
+                    let message = output.streamError?.localizedDescription ?? "Echec ecriture ESC/POS."
+                    throw NSError(domain: "PrinterBridge", code: 3, userInfo: [NSLocalizedDescriptionKey: message])
+                }
+
+                offset += written
+                continue
+            }
+
+            if Date() >= deadline {
+                throw NSError(
+                    domain: "PrinterBridge",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "Delai depasse lors de l'ecriture ESC/POS."]
+                )
+            }
+
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+    }
+
+    private func buildEscPosPayload(lines: [String], cut: Bool, encodingName: String) -> Data {
+        var payload = Data([0x1B, 0x40]) // ESC @ init
+        for line in lines {
+            payload.append(encodeEscPosText(line, encodingName: encodingName))
+            payload.append(0x0A) // LF
+        }
+        if cut {
+            payload.append(contentsOf: [0x1D, 0x56, 0x41, 0x00]) // GS V A 0
+        }
+        return payload
+    }
+
+    private func encodeEscPosText(_ text: String, encodingName: String) -> Data {
+        let folded = text.folding(options: [.diacriticInsensitive, .widthInsensitive], locale: Locale(identifier: "fr_FR"))
+        let normalizedEncoding = encodingName.lowercased()
+        let cp437Encoding = String.Encoding(
+            rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(kCFStringEncodingDOSLatinUS))
+        )
+
+        if normalizedEncoding == "cp437" || normalizedEncoding == "ibm437" {
+            return folded.data(using: cp437Encoding, allowLossyConversion: true) ?? Data()
+        }
+
+        return folded.data(using: .ascii, allowLossyConversion: true) ?? Data()
+    }
+
+    private func mapEscPosStreamError(_ error: Error) -> (code: String, message: String) {
+        let message = error.localizedDescription
+        let lowerMessage = message.lowercased()
+        if lowerMessage.contains("timed out") || lowerMessage.contains("delai") {
+            return ("timeout", "Delai depasse lors de la communication imprimante.")
+        }
+        if lowerMessage.contains("could not connect") || lowerMessage.contains("refused") || lowerMessage.contains("non joignable") {
+            return ("unreachable", "Imprimante non joignable sur le reseau local.")
+        }
+        return ("unknown", message)
     }
 
     private func resolve(_ call: CAPPluginCall, data: [String: Any]) {

@@ -17,8 +17,10 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useOfflineManager } from "@/lib/offline-manager"
 import { OfflineIndicator } from "@/components/offline-indicator"
 import { getMenuButtonColorClasses } from "@/lib/menu-colors"
-import { printTicketWithConfiguredMode } from "@/lib/print-client"
+import { getConfiguredPrintSettings, printTicketWithConfiguredMode, type PrintMode } from "@/lib/print-client"
+import { isNativeCapacitorRuntime } from "@/lib/capacitor-printer"
 import type { EposTicket } from "@/lib/epos"
+import { getItemDisplayInfo } from "@/lib/item-display"
 
 // Fonction pour générer un ID unique
 const generateUniqueId = (productName: string) => {
@@ -151,6 +153,8 @@ export default function OrderPage() {
   const [rhumArrangeDialogOpen, setRhumArrangeDialogOpen] = useState(false)
   const [rhumArrangeItem, setRhumArrangeItem] = useState<MenuItem | null>(null)
   const [rhumArrangeOptions, setRhumArrangeOptions] = useState<string[]>([])
+  const [ginTonicDialogOpen, setGinTonicDialogOpen] = useState(false)
+  const [ginTonicItem, setGinTonicItem] = useState<MenuItem | null>(null)
   const [supplementDialog, setSupplementDialog] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [transferTables, setTransferTables] = useState<Table[]>([])
@@ -225,12 +229,22 @@ export default function OrderPage() {
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
   const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
   const defaultRhumArrangeOptions = ["Ananas", "Vanille", "Mangue", "Passion", "Coco", "Gingembre"]
+  const ginTonicOptions: Array<{ name: string; surcharge: number }> = [
+    { name: "Gibsons", surcharge: 0 },
+    { name: "Plymouth", surcharge: 2 },
+    { name: "Malfy", surcharge: 2 },
+    { name: "G'Vine", surcharge: 2 },
+    { name: "L'Acrobate", surcharge: 2 },
+    { name: "Hendrick's", surcharge: 2 },
+    { name: "Monkey 47", surcharge: 3 },
+  ]
   const requiresCuissonSelection = (name: string) => {
     const normalizedName = normalizeForSearch(name)
     return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
   }
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isRhumArrangeItem = (name: string) => normalizeForSearch(name) === "rhum arrange"
+  const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
   const parseChoiceOptions = (value?: string | null) =>
     String(value || "")
       .split(/[,;\n]+/)
@@ -365,10 +379,15 @@ export default function OrderPage() {
 
     const pushItems = (items: CartItem[], strong: boolean, fontScale: number) => {
       items.forEach((item) => {
-        const itemLabel = item.menuItem?.name || item.menuItemId || "Article"
-        lines.push({ content: `${item.quantity}x ${itemLabel}`, bold: strong, fontScale })
-        if (item.notes) {
-          lines.push({ content: `  - ${item.notes}` })
+        const baseItemName = item.menuItem?.name || item.menuItemId || "Article"
+        const { displayName, displayNote } = getItemDisplayInfo(baseItemName, item.notes)
+        lines.push({ content: `${item.quantity}x ${displayName}`, bold: strong, fontScale })
+        if (displayNote) {
+          displayNote
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line.length > 0)
+            .forEach((line) => lines.push({ content: `  - ${line}` }))
         }
       })
     }
@@ -417,9 +436,12 @@ export default function OrderPage() {
     }
   }
 
+  const stationLabel = (station: DispatchStation) => (station === "bar" ? "Bar" : "Cuisine")
+
   const printDispatchedTickets = async (
     sentItems: CartItem[],
     remainingItems: CartItem[] = [],
+    options?: { modeOverride?: PrintMode },
   ): Promise<DispatchPrintSummary> => {
     const summary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
 
@@ -427,7 +449,11 @@ export default function OrderPage() {
       const ticket = buildStationTicket(station, sentItems, remainingItems)
       if (!ticket) continue
 
-      const result = await printTicketWithConfiguredMode({ kind: station, ticket })
+      const result = await printTicketWithConfiguredMode({
+        kind: station,
+        ticket,
+        modeOverride: options?.modeOverride,
+      })
       if (result.ok) {
         summary.printedStations.push(station)
       } else {
@@ -726,11 +752,39 @@ export default function OrderPage() {
     }
   }
 
-  const addToCart = async (menuItem: MenuItem) => {
+  const addToCart = async (menuItem: MenuItem, sourceCartItem?: CartItem) => {
     // BDD source de vérité:
     // - si un item "pending" identique existe déjà, on incrémente sa quantité
     // - sinon, on insère un nouvel item en BDD
     try {
+      if (sourceCartItem) {
+        const response = await fetch("/api/orders/fire-follow", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            orderId: currentOrder?.id,
+            items: [
+              {
+                cartItemId: sourceCartItem.cartItemId,
+                menuItemId: getCartItemMenuItemId(sourceCartItem),
+                quantity: sourceCartItem.quantity + 1,
+                price: getCartItemPrice(sourceCartItem),
+                status: sourceCartItem.status,
+                notes: sourceCartItem.notes,
+                isComplimentary: sourceCartItem.isComplimentary || false,
+                complimentaryReason: sourceCartItem.complimentaryReason,
+              },
+            ],
+            serverId: user?.id || "",
+          }),
+        })
+
+        if (response.ok) {
+          await fetchOrderData()
+        }
+        return
+      }
+
       const existingPending = cart.find(
         (i) => i.status === "pending" && getCartItemMenuItemId(i) === menuItem.id && (!i.notes || i.notes.trim() === ""),
       )
@@ -912,6 +966,25 @@ export default function OrderPage() {
     setRhumArrangeOptions([])
   }
 
+  const openGinTonicDialog = (item: MenuItem) => {
+    setGinTonicItem(item)
+    setGinTonicDialogOpen(true)
+  }
+
+  const handleGinTonicSelect = async (choice: { name: string; surcharge: number }) => {
+    if (!ginTonicItem) return
+    const note = choice.surcharge > 0 ? `Gin: ${choice.name} (+${choice.surcharge}€)` : `Gin: ${choice.name}`
+    await addItemsToOrder([
+      {
+        menuItem: ginTonicItem,
+        notes: note,
+        priceOverride: ginTonicItem.price + choice.surcharge,
+      },
+    ])
+    setGinTonicDialogOpen(false)
+    setGinTonicItem(null)
+  }
+
   // ── Couverts ──────────────────────────────────────────────────────────
   const getActiveCoversCount = () => {
     if (coversCount != null && coversCount > 0) return coversCount
@@ -992,6 +1065,10 @@ export default function OrderPage() {
     }
     if (isRhumArrangeItem(item.name)) {
       openRhumArrangeDialog(item)
+      return
+    }
+    if (isGinTonicItem(item.name)) {
+      openGinTonicDialog(item)
       return
     }
     if (isVinBouteilleItem(item) && !hasOrderedWineBottle) {
@@ -1459,7 +1536,35 @@ export default function OrderPage() {
       orderId: currentOrder?.id,
     }
 
+    const printSettings = await getConfiguredPrintSettings()
+    const activePrintMode = printSettings.print_mode
+    const isEscPosMode = activePrintMode === "escpos_tcp"
+
+    if (isEscPosMode && !isNativeCapacitorRuntime()) {
+      showSendFeedback({
+        title: "Mode ESC/POS indisponible",
+        lines: [
+          "Le mode global ESC/POS TCP (9100) fonctionne uniquement dans l'app native iOS/Android.",
+          "Commande non envoyee: impression requise avant envoi.",
+        ],
+        variant: "error",
+      })
+      return
+    }
+
     if (!isOnline) {
+      if (isEscPosMode) {
+        showSendFeedback({
+          title: "Impression requise",
+          lines: [
+            "Mode ESC/POS actif: impossible d'envoyer hors ligne.",
+            "Commande conservee en attente sur la table.",
+          ],
+          variant: "warning",
+        })
+        return
+      }
+
       savePendingOrder(orderData)
       setCart(itemsToKeep) // Garder seulement les "à suivre"
       if (supplementsToSend.length > 0) {
@@ -1474,6 +1579,25 @@ export default function OrderPage() {
     }
 
     try {
+      let printSummary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
+
+      if (isEscPosMode) {
+        printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep, { modeOverride: "escpos_tcp" })
+        if (printSummary.failedStations.length > 0) {
+          showSendFeedback({
+            title: "Impression requise",
+            lines: [
+              "Commande non envoyee: au moins une impression ESC/POS a echoue.",
+              ...printSummary.failedStations.map(
+                ({ station, message }) => `Impression ${stationLabel(station)} echouee: ${message}`,
+              ),
+            ],
+            variant: "error",
+          })
+          return
+        }
+      }
+
       const response = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1481,7 +1605,9 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        const printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep)
+        if (!isEscPosMode) {
+          printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep)
+        }
 
         // On se resynchronise depuis la BDD (source de vérité)
         await fetchOrderData()
@@ -1501,7 +1627,7 @@ export default function OrderPage() {
 
           if (printSummary.printedStations.length > 0) {
             const label = printSummary.printedStations
-              .map((station) => (station === "bar" ? "Bar" : "Cuisine"))
+              .map((station) => stationLabel(station))
               .join(", ")
             feedback.lines.push(`Ticket imprimé: ${label}`)
           }
@@ -1509,7 +1635,7 @@ export default function OrderPage() {
           if (printSummary.failedStations.length > 0) {
             feedback.variant = "warning"
             printSummary.failedStations.forEach(({ station, message }) => {
-              const label = station === "bar" ? "Bar" : "Cuisine"
+              const label = stationLabel(station)
               feedback.lines.push(`Impression ${label} échouée: ${message}`)
             })
           }
@@ -1523,6 +1649,20 @@ export default function OrderPage() {
       }
     } catch (error) {
       console.error("[v0] Error sending order:", error)
+      if (isEscPosMode) {
+        const message = error instanceof Error ? error.message : "Erreur reseau"
+        showSendFeedback({
+          title: "Commande non envoyee",
+          lines: [
+            "Impression ESC/POS requise et envoi impossible pour le moment.",
+            message,
+            "La commande reste en suspens sur la table.",
+          ],
+          variant: "error",
+        })
+        return
+      }
+
       savePendingOrder(orderData)
       
       // Vider le panier même en erreur - la BDD est la source de vérité
@@ -1596,6 +1736,52 @@ export default function OrderPage() {
         orderId: currentOrder?.id,
       }
 
+      const printSettings = await getConfiguredPrintSettings()
+      const activePrintMode = printSettings.print_mode
+      const isEscPosMode = activePrintMode === "escpos_tcp"
+
+      if (isEscPosMode && !isNativeCapacitorRuntime()) {
+        showSendFeedback({
+          title: "Mode ESC/POS indisponible",
+          lines: [
+            "Le mode global ESC/POS TCP (9100) fonctionne uniquement dans l'app native iOS/Android.",
+            "Envoi de la suite bloque.",
+          ],
+          variant: "error",
+        })
+        return
+      }
+
+      if (!isOnline && isEscPosMode) {
+        showSendFeedback({
+          title: "Impression requise",
+          lines: [
+            "Mode ESC/POS actif: impossible d'envoyer la suite hors ligne.",
+            "Les articles restent en attente sur la table.",
+          ],
+          variant: "warning",
+        })
+        return
+      }
+
+      let printSummary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
+      if (isEscPosMode) {
+        printSummary = await printDispatchedTickets(toFollowItems, remainingItems, { modeOverride: "escpos_tcp" })
+        if (printSummary.failedStations.length > 0) {
+          showSendFeedback({
+            title: "Impression requise",
+            lines: [
+              "Envoi de la suite annule: au moins une impression ESC/POS a echoue.",
+              ...printSummary.failedStations.map(
+                ({ station, message }) => `Impression ${stationLabel(station)} echouee: ${message}`,
+              ),
+            ],
+            variant: "error",
+          })
+          return
+        }
+      }
+
       const response = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1603,7 +1789,9 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        const printSummary = await printDispatchedTickets(toFollowItems, remainingItems)
+        if (!isEscPosMode) {
+          printSummary = await printDispatchedTickets(toFollowItems, remainingItems)
+        }
 
         await fetchOrderData()
         if (sendPhase) {
@@ -1615,7 +1803,7 @@ export default function OrderPage() {
 
           if (printSummary.printedStations.length > 0) {
             const label = printSummary.printedStations
-              .map((station) => (station === "bar" ? "Bar" : "Cuisine"))
+              .map((station) => stationLabel(station))
               .join(", ")
             feedback.lines.push(`Ticket imprimé: ${label}`)
           }
@@ -1623,7 +1811,7 @@ export default function OrderPage() {
           if (printSummary.failedStations.length > 0) {
             feedback.variant = "warning"
             printSummary.failedStations.forEach(({ station, message }) => {
-              const label = station === "bar" ? "Bar" : "Cuisine"
+              const label = stationLabel(station)
               feedback.lines.push(`Impression ${label} échouée: ${message}`)
             })
           }
@@ -1637,9 +1825,10 @@ export default function OrderPage() {
       }
     } catch (error) {
       console.error("[v0] Error firing to follow items:", error)
+      const message = error instanceof Error ? error.message : "Erreur reseau"
       showSendFeedback({
         title: "Échec de l'envoi",
-        lines: ["Erreur lors de l'envoi des plats."],
+        lines: ["Erreur lors de l'envoi des plats.", message],
         variant: "error",
       })
     }
@@ -2096,6 +2285,8 @@ export default function OrderPage() {
                 <div className="space-y-2 max-h-32 sm:max-h-40 overflow-y-auto">
                   {existingItems.map((item) => {
                     const isSwiped = swipedExistingItemId === item.id
+                    const baseItemName = menuItems.find((m) => m.id === item.menu_item_id)?.name || "Article"
+                    const { displayName } = getItemDisplayInfo(baseItemName, item.notes)
                     return (
                       <div key={item.id} className="group relative overflow-hidden rounded">
                         <button
@@ -2123,7 +2314,7 @@ export default function OrderPage() {
                           className={`relative z-10 flex items-center justify-between text-xs sm:text-sm text-slate-300 bg-slate-900/50 p-2 transition-transform duration-200 ${isSwiped ? "-translate-x-20" : "translate-x-0"}`}
                         >
                           <span>
-                            {item.quantity}x {menuItems.find((m) => m.id === item.menu_item_id)?.name}
+                            {item.quantity}x {displayName}
                           </span>
                           <Badge variant="default" className="text-xs">
                             {item.status === "fired" ? "Envoyé" : 
@@ -2146,7 +2337,9 @@ export default function OrderPage() {
                 <p className="text-center text-slate-500 py-6 sm:py-8 text-sm">Panier vide</p>
               ) : (
                 <>
-                  {cart.map((item, index) => (
+                  {cart.map((item, index) => {
+                    const { displayName, displayNote } = getItemDisplayInfo(item.menuItem?.name || "Article inconnu", item.notes)
+                    return (
                     <div
                       key={`${item.id}-${index}`}
                       className={`px-2 py-1.5 sm:p-2.5 rounded-lg ${item.isComplimentary ? "bg-green-900/20 border-2 border-green-700" : "bg-slate-900"}`}
@@ -2155,7 +2348,7 @@ export default function OrderPage() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
                             <h4 className="font-medium text-white text-xs sm:text-sm truncate">
-                              {item.menuItem?.name || "Article inconnu"}
+                              {displayName}
                             </h4>
                             {item.isComplimentary && (
                               <Badge className="bg-green-600 text-[10px] px-1 py-0 leading-tight flex items-center gap-0.5">
@@ -2188,7 +2381,7 @@ export default function OrderPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => item.menuItem && addToCart(item.menuItem)}
+                            onClick={() => item.menuItem && addToCart(item.menuItem, item)}
                             className="h-6 w-6 sm:h-7 sm:w-7 p-0 bg-slate-800 border-slate-700 text-white"
                           >
                             <Plus className="h-3 w-3" />
@@ -2231,9 +2424,10 @@ export default function OrderPage() {
                           Offert
                         </Button>
                       </div>
-                      {item.notes && <p className="text-[10px] text-slate-400 mt-0.5 italic">{item.notes}</p>}
+                      {displayNote && <p className="text-[10px] text-slate-400 mt-0.5 italic">{displayNote}</p>}
                     </div>
-                  ))}
+                    )
+                  })}
 
                   {/* Supplements */}
                   {supplements.map((supplement) => (
@@ -2595,6 +2789,47 @@ export default function OrderPage() {
                 setRhumArrangeDialogOpen(false)
                 setRhumArrangeItem(null)
                 setRhumArrangeOptions([])
+              }}
+              className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+            >
+              Annuler
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Gin Tonic Dialog */}
+      <Dialog
+        open={ginTonicDialogOpen}
+        onOpenChange={(open) => {
+          setGinTonicDialogOpen(open)
+          if (!open) {
+            setGinTonicItem(null)
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🍸 Choix du gin — {ginTonicItem?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 py-3">
+            {ginTonicOptions.map((option) => (
+              <Button
+                key={option.name}
+                onClick={() => handleGinTonicSelect(option)}
+                className="h-12 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-sky-600 hover:border-sky-500 transition-colors justify-between px-4"
+              >
+                <span>{option.name}</span>
+                <span className="text-sm text-slate-200">{option.surcharge > 0 ? `+${option.surcharge}€` : "+0€"}</span>
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setGinTonicDialogOpen(false)
+                setGinTonicItem(null)
               }}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
