@@ -239,7 +239,6 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
 
                 let payload = self.buildEscPosPayload(lines: rawLines, cut: cut, encodingName: encoding)
                 try self.writeEscPosData(payload, to: output, timeoutMs: timeoutMs)
-                try self.waitForEscPosPeerSignal(from: output, timeoutMs: min(2500, timeoutMs))
 
                 self.resolve(call, data: ["ok": true])
             } catch {
@@ -563,15 +562,101 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     private func buildEscPosPayload(lines: [String], cut: Bool, encodingName: String) -> Data {
+        let normalizedEncoding = encodingName.lowercased()
         var payload = Data([0x1B, 0x40]) // ESC @ init
-        for line in lines {
+
+        // Force CP437 table when requested (common setting on Epson TM ESC/POS over TCP 9100).
+        if normalizedEncoding == "cp437" || normalizedEncoding == "ibm437" {
+            payload.append(contentsOf: [0x1B, 0x74, 0x00]) // ESC t 0
+        }
+
+        for rawLine in lines {
+            let parsed = parseEscPosMetaLine(rawLine)
+            let line = parsed.content
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isLarge = parsed.isLarge ?? isEscPosLargeLine(trimmed)
+            let isBold = parsed.isBold ?? isEscPosBoldLine(trimmed)
+            let alignByte = parsed.alignByte ?? 0x00
+
+            // Font sizing: normal = x1, large = approx x1.5 (double height only).
+            let sizeByte: UInt8 = isLarge ? 0x01 : 0x00
+            payload.append(contentsOf: [0x1D, 0x21, sizeByte]) // GS ! n
+
+            let boldByte: UInt8 = isBold ? 0x01 : 0x00
+            payload.append(contentsOf: [0x1B, 0x45, boldByte]) // ESC E n
+
+            payload.append(contentsOf: [0x1B, 0x61, alignByte]) // ESC a n
             payload.append(encodeEscPosText(line, encodingName: encodingName))
             payload.append(contentsOf: [0x0D, 0x0A]) // CRLF (plus compatible selon les modèles)
         }
+
+        // Reset style and add a small feed before cut.
+        payload.append(contentsOf: [0x1D, 0x21, 0x00]) // size normal
+        payload.append(contentsOf: [0x1B, 0x45, 0x00]) // bold off
+        payload.append(contentsOf: [0x1B, 0x64, 0x03]) // feed 3 lines
+
         if cut {
             payload.append(contentsOf: [0x1D, 0x56, 0x41, 0x00]) // GS V A 0
         }
         return payload
+    }
+
+    private func parseEscPosMetaLine(_ rawLine: String) -> (content: String, isLarge: Bool?, isBold: Bool?, alignByte: UInt8?) {
+        guard rawLine.hasPrefix("[[SP|"), let endRange = rawLine.range(of: "]]") else {
+            return (rawLine, nil, nil, nil)
+        }
+
+        let metaStart = rawLine.index(rawLine.startIndex, offsetBy: 5)
+        let meta = String(rawLine[metaStart..<endRange.lowerBound])
+        let content = String(rawLine[endRange.upperBound...])
+
+        var isLarge: Bool?
+        var isBold: Bool?
+        var alignByte: UInt8?
+
+        for token in meta.split(separator: ";") {
+            let pair = token.split(separator: "=", maxSplits: 1).map(String.init)
+            guard pair.count == 2 else { continue }
+            let key = pair[0]
+            let value = pair[1]
+
+            if key == "s" {
+                if value == "large" { isLarge = true }
+                if value == "normal" { isLarge = false }
+            } else if key == "b" {
+                if value == "1" { isBold = true }
+                if value == "0" { isBold = false }
+            } else if key == "a" {
+                if value == "center" { alignByte = 0x01 }
+                else if value == "right" { alignByte = 0x02 }
+                else if value == "left" { alignByte = 0x00 }
+            }
+        }
+
+        return (content, isLarge, isBold, alignByte)
+    }
+
+    private func isEscPosLargeLine(_ line: String) -> Bool {
+        if line.hasPrefix("Table ") || line.hasPrefix("Serveur:") {
+            return true
+        }
+        if line.range(of: #"^\d+x\s"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private func isEscPosBoldLine(_ line: String) -> Bool {
+        if line.hasPrefix("Table ") || line.hasPrefix("Serveur:") {
+            return true
+        }
+        if line == "DIRECT" || line.hasPrefix("A SUIVRE") {
+            return true
+        }
+        if line.range(of: #"^\d+x\s"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
     }
 
     private func encodeEscPosText(_ text: String, encodingName: String) -> Data {

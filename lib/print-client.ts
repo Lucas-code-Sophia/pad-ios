@@ -353,14 +353,38 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
   }
 }
 
+const resolveEscPosSize = (line: EposTicket["lines"][number]): "normal" | "large" => {
+  const width = typeof line.width === "number" ? line.width : 1
+  const height = typeof line.height === "number" ? line.height : 1
+  if (width > 1 || height > 1) return "large"
+  const scale = typeof line.fontScale === "number" && Number.isFinite(line.fontScale) ? line.fontScale : 1
+  return scale >= 1.25 ? "large" : "normal"
+}
+
+const encodeEscPosMetaLine = (
+  content: string,
+  options: { size?: "normal" | "large"; bold?: boolean; align?: "left" | "center" | "right" } = {},
+) => {
+  const size = options.size || "normal"
+  const bold = options.bold ? "1" : "0"
+  const align = options.align || "left"
+  return `[[SP|s=${size};b=${bold};a=${align}]]${content}`
+}
+
 const toEscPosLines = (ticket: EposTicket): string[] => {
   const lines: string[] = []
   if (ticket.title) {
-    lines.push(ticket.title)
-    lines.push("")
+    lines.push(encodeEscPosMetaLine(ticket.title, { bold: true, align: "center" }))
+    lines.push(encodeEscPosMetaLine("", { align: "center" }))
   }
   for (const line of ticket.lines) {
-    lines.push(line.content)
+    lines.push(
+      encodeEscPosMetaLine(line.content, {
+        size: resolveEscPosSize(line),
+        bold: line.bold,
+        align: line.align,
+      }),
+    )
   }
   return lines
 }
@@ -413,45 +437,23 @@ const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket):
 
   try {
     const lines = toEscPosLines(ticket)
-    const attemptPrint = async (step: "native_escpos_print_1" | "native_escpos_print_2") => {
-      const printStart = Date.now()
-      const nativeResult = await nativePrintEscPos({
-        ip,
-        port: 9100,
-        lines,
-        cut: true,
-        encoding: "cp437",
-      })
-      diagnostics.addEntry({
-        step,
-        ok: nativeResult.ok,
-        code: nativeResult.code,
-        message: nativeResult.message,
-        status: nativeResult.status,
-        bodySnippet: bodyToSnippet(nativeResult.body),
-        durationMs: Date.now() - printStart,
-      })
-      return nativeResult
-    }
-
-    let nativeResult = await attemptPrint("native_escpos_print_1")
-    const shouldRetry =
-      !nativeResult.ok &&
-      ["timeout", "unreachable", "offline", "unknown"].includes(String(nativeResult.code || "").toLowerCase())
-
-    if (shouldRetry) {
-      const wakeStart = Date.now()
-      const probe = await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 1200 })
-      diagnostics.addEntry({
-        step: "escpos_probe_retry",
-        ok: probe.ok && probe.reachable,
-        code: probe.code,
-        message: probe.message,
-        durationMs: Date.now() - wakeStart,
-      })
-      await wait(220)
-      nativeResult = await attemptPrint("native_escpos_print_2")
-    }
+    const printStart = Date.now()
+    const nativeResult = await nativePrintEscPos({
+      ip,
+      port: 9100,
+      lines,
+      cut: true,
+      encoding: "cp437",
+    })
+    diagnostics.addEntry({
+      step: "native_escpos_print",
+      ok: nativeResult.ok,
+      code: nativeResult.code,
+      message: nativeResult.message,
+      status: nativeResult.status,
+      bodySnippet: bodyToSnippet(nativeResult.body),
+      durationMs: Date.now() - printStart,
+    })
 
     if (nativeResult.ok) return { ok: true, mode: "escpos_tcp", diagnostics: diagnostics.finalize() }
     return {
