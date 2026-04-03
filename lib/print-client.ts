@@ -25,6 +25,29 @@ export type PrintResult = {
   ok: boolean
   mode: PrintMode
   message?: string
+  diagnostics?: PrintDiagnostics
+}
+
+export type PrintDiagnosticsEntry = {
+  at: string
+  step: string
+  ok: boolean
+  code?: string
+  message?: string
+  status?: number
+  bodySnippet?: string
+  durationMs?: number
+}
+
+export type PrintDiagnostics = {
+  kind: PrintKind
+  mode: PrintMode
+  ip?: string
+  runtime: "native" | "web"
+  startedAt: string
+  finishedAt: string
+  durationMs: number
+  entries: PrintDiagnosticsEntry[]
 }
 
 const normalizePrintMode = (value: unknown): PrintMode => {
@@ -32,6 +55,44 @@ const normalizePrintMode = (value: unknown): PrintMode => {
   if (value === "escpos_tcp") return "escpos_tcp"
   if (value === "airprint") return "direct_epos"
   return "server"
+}
+
+const BODY_SNIPPET_LIMIT = 200
+
+const bodyToSnippet = (value?: string) => {
+  if (!value) return undefined
+  const singleLine = value.replace(/\s+/g, " ").trim()
+  if (!singleLine) return undefined
+  return singleLine.length > BODY_SNIPPET_LIMIT ? `${singleLine.slice(0, BODY_SNIPPET_LIMIT)}...` : singleLine
+}
+
+const createDiagnostics = (kind: PrintKind, mode: PrintMode, ip?: string) => {
+  const startedAt = Date.now()
+  const runtime: "native" | "web" = isNativeCapacitorRuntime() ? "native" : "web"
+  const entries: PrintDiagnosticsEntry[] = []
+
+  const addEntry = (entry: Omit<PrintDiagnosticsEntry, "at">) => {
+    entries.push({
+      at: new Date().toISOString(),
+      ...entry,
+    })
+  }
+
+  const finalize = (): PrintDiagnostics => {
+    const finishedAtMs = Date.now()
+    return {
+      kind,
+      mode,
+      ip: ip || undefined,
+      runtime,
+      startedAt: new Date(startedAt).toISOString(),
+      finishedAt: new Date(finishedAtMs).toISOString(),
+      durationMs: Math.max(0, finishedAtMs - startedAt),
+      entries,
+    }
+  }
+
+  return { addEntry, finalize }
 }
 
 const toNativeRole = (kind: PrintKind): NativePrinterRole => kind
@@ -66,6 +127,8 @@ export const getConfiguredPrintSettings = async (): Promise<PrintSettings> => {
 }
 
 const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<PrintResult> => {
+  const diagnostics = createDiagnostics(kind, "server")
+  const startedAt = Date.now()
   const response = await fetch("/api/print", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -73,15 +136,24 @@ const runServerPrint = async (kind: PrintKind, ticket: EposTicket): Promise<Prin
   })
   const json = await response.json().catch(() => ({}))
 
+  diagnostics.addEntry({
+    step: "api_print",
+    ok: response.ok && json?.ok !== false,
+    status: response.status,
+    message: String(json?.error || json?.message || response.statusText || ""),
+    durationMs: Date.now() - startedAt,
+  })
+
   if (!response.ok || json?.ok === false) {
     return {
       ok: false,
       mode: "server",
       message: String(json?.error || "Échec impression serveur"),
+      diagnostics: diagnostics.finalize(),
     }
   }
 
-  return { ok: true, mode: "server" }
+  return { ok: true, mode: "server", diagnostics: diagnostics.finalize() }
 }
 
 const readNativeEposErrorFromBody = (body?: string): { code?: string; message?: string } | null => {
@@ -122,8 +194,16 @@ const wakePrinterTcp = async (ip: string) => {
 }
 
 const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
+  const diagnostics = createDiagnostics(kind, "direct_epos", ip)
+
   if (!ip) {
-    return { ok: false, mode: "direct_epos", message: "IP imprimante manquante" }
+    diagnostics.addEntry({
+      step: "validate_ip",
+      ok: false,
+      code: "missing_ip",
+      message: "IP imprimante manquante",
+    })
+    return { ok: false, mode: "direct_epos", message: "IP imprimante manquante", diagnostics: diagnostics.finalize() }
   }
 
   if (isNativeCapacitorRuntime()) {
@@ -131,7 +211,18 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
     const nativeLabel = nativePlatform === "android" ? "Android" : "iOS"
 
     if (!hasNativePrinterBridge()) {
-      return { ok: false, mode: "direct_epos", message: `Plugin PrinterBridge ${nativeLabel} indisponible.` }
+      diagnostics.addEntry({
+        step: "bridge_check",
+        ok: false,
+        code: "bridge_unavailable",
+        message: `Plugin PrinterBridge ${nativeLabel} indisponible.`,
+      })
+      return {
+        ok: false,
+        mode: "direct_epos",
+        message: `Plugin PrinterBridge ${nativeLabel} indisponible.`,
+        diagnostics: diagnostics.finalize(),
+      }
     }
 
     const buildNativeResult = async () => {
@@ -149,34 +240,84 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
     }
 
     try {
+      const wakeStart1 = Date.now()
       await wakePrinterTcp(ip)
+      diagnostics.addEntry({
+        step: "wake_probe_1",
+        ok: true,
+        durationMs: Date.now() - wakeStart1,
+      })
+
+      const printStart1 = Date.now()
       let nativeResult = await buildNativeResult()
+      diagnostics.addEntry({
+        step: "native_print_1",
+        ok: nativeResult.ok,
+        code: nativeResult.code,
+        message: nativeResult.message,
+        status: nativeResult.status,
+        bodySnippet: bodyToSnippet(nativeResult.body),
+        durationMs: Date.now() - printStart1,
+      })
       if (!nativeResult.ok && isRecoverableDirectEposError(nativeResult)) {
         await wait(350)
+        const wakeStart2 = Date.now()
         await wakePrinterTcp(ip)
+        diagnostics.addEntry({
+          step: "wake_probe_2",
+          ok: true,
+          durationMs: Date.now() - wakeStart2,
+        })
+        const printStart2 = Date.now()
         nativeResult = await buildNativeResult()
+        diagnostics.addEntry({
+          step: "native_print_2",
+          ok: nativeResult.ok,
+          code: nativeResult.code,
+          message: nativeResult.message,
+          status: nativeResult.status,
+          bodySnippet: bodyToSnippet(nativeResult.body),
+          durationMs: Date.now() - printStart2,
+        })
       }
-      if (nativeResult.ok) return { ok: true, mode: "direct_epos" }
+      if (nativeResult.ok) return { ok: true, mode: "direct_epos", diagnostics: diagnostics.finalize() }
       const nativeMessage = nativeResult.message || "Échec impression Epson native"
-      return { ok: false, mode: "direct_epos", message: nativeMessage }
+      return { ok: false, mode: "direct_epos", message: nativeMessage, diagnostics: diagnostics.finalize() }
     } catch (error) {
       const nativeMessage = error instanceof Error ? error.message : "Échec impression Epson native"
-      return { ok: false, mode: "direct_epos", message: nativeMessage }
+      diagnostics.addEntry({
+        step: "native_exception",
+        ok: false,
+        code: "exception",
+        message: nativeMessage,
+      })
+      return { ok: false, mode: "direct_epos", message: nativeMessage, diagnostics: diagnostics.finalize() }
     }
   }
 
   try {
+    const httpStart = Date.now()
     const xml = buildEposXml(ticket)
     const response = await sendToEpos(ip, xml)
+    diagnostics.addEntry({
+      step: "web_epos_http",
+      ok: response.ok,
+      status: response.status,
+      code: response.code,
+      message: response.ok ? "HTTP ePOS OK" : `Imprimante non joignable (${response.status})`,
+      bodySnippet: bodyToSnippet(response.body),
+      durationMs: Date.now() - httpStart,
+    })
     if (!response.ok) {
       return {
         ok: false,
         mode: "direct_epos",
         message: `Imprimante non joignable (${response.status})`,
+        diagnostics: diagnostics.finalize(),
       }
     }
 
-    return { ok: true, mode: "direct_epos" }
+    return { ok: true, mode: "direct_epos", diagnostics: diagnostics.finalize() }
   } catch (error) {
     const isHttps = typeof window !== "undefined" && window.location.protocol === "https:"
     const baseMessage = error instanceof Error ? error.message : "Échec impression directe"
@@ -184,7 +325,13 @@ const runDirectEposPrint = async (kind: PrintKind, ip: string, ticket: EposTicke
       ? "Le navigateur bloque l'accès HTTP local depuis HTTPS (mode direct Epson)."
       : baseMessage
 
-    return { ok: false, mode: "direct_epos", message }
+    diagnostics.addEntry({
+      step: "web_epos_exception",
+      ok: false,
+      code: "exception",
+      message,
+    })
+    return { ok: false, mode: "direct_epos", message, diagnostics: diagnostics.finalize() }
   }
 }
 
@@ -201,29 +348,53 @@ const toEscPosLines = (ticket: EposTicket): string[] => {
 }
 
 const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
+  const kind = _kind
+  const diagnostics = createDiagnostics(kind, "escpos_tcp", ip)
+
   if (!ip) {
-    return { ok: false, mode: "escpos_tcp", message: "IP imprimante manquante" }
+    diagnostics.addEntry({
+      step: "validate_ip",
+      ok: false,
+      code: "missing_ip",
+      message: "IP imprimante manquante",
+    })
+    return { ok: false, mode: "escpos_tcp", message: "IP imprimante manquante", diagnostics: diagnostics.finalize() }
   }
 
   if (!isNativeCapacitorRuntime()) {
+    diagnostics.addEntry({
+      step: "runtime_check",
+      ok: false,
+      code: "non_native_runtime",
+      message: "Mode ESC/POS TCP (9100) disponible uniquement dans l'app native iOS/Android.",
+    })
     return {
       ok: false,
       mode: "escpos_tcp",
       message: "Mode ESC/POS TCP (9100) disponible uniquement dans l'app native iOS/Android.",
+      diagnostics: diagnostics.finalize(),
     }
   }
 
   const nativePlatform = getNativeCapacitorPlatform()
   const nativeLabel = nativePlatform === "android" ? "Android" : "iOS"
   if (!hasNativePrinterBridge()) {
+    diagnostics.addEntry({
+      step: "bridge_check",
+      ok: false,
+      code: "bridge_unavailable",
+      message: `Plugin PrinterBridge ${nativeLabel} indisponible.`,
+    })
     return {
       ok: false,
       mode: "escpos_tcp",
       message: `Plugin PrinterBridge ${nativeLabel} indisponible.`,
+      diagnostics: diagnostics.finalize(),
     }
   }
 
   try {
+    const printStart = Date.now()
     const nativeResult = await nativePrintEscPos({
       ip,
       port: 9100,
@@ -231,15 +402,31 @@ const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket):
       cut: true,
       encoding: "cp437",
     })
-    if (nativeResult.ok) return { ok: true, mode: "escpos_tcp" }
+    diagnostics.addEntry({
+      step: "native_escpos_print",
+      ok: nativeResult.ok,
+      code: nativeResult.code,
+      message: nativeResult.message,
+      status: nativeResult.status,
+      bodySnippet: bodyToSnippet(nativeResult.body),
+      durationMs: Date.now() - printStart,
+    })
+    if (nativeResult.ok) return { ok: true, mode: "escpos_tcp", diagnostics: diagnostics.finalize() }
     return {
       ok: false,
       mode: "escpos_tcp",
       message: nativeResult.message || "Echec impression ESC/POS TCP",
+      diagnostics: diagnostics.finalize(),
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Echec impression ESC/POS TCP"
-    return { ok: false, mode: "escpos_tcp", message }
+    diagnostics.addEntry({
+      step: "native_escpos_exception",
+      ok: false,
+      code: "exception",
+      message,
+    })
+    return { ok: false, mode: "escpos_tcp", message, diagnostics: diagnostics.finalize() }
   }
 }
 

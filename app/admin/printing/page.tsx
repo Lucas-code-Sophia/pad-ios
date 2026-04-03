@@ -5,16 +5,30 @@ import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ArrowLeft, Printer } from "lucide-react"
+import { ArrowLeft, CheckCircle2, Loader2, Printer, XCircle } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { sampleTicket } from "@/lib/epos"
-import { printTicketWithConfiguredMode, type PrintMode } from "@/lib/print-client"
+import { printTicketWithConfiguredMode, type PrintMode, type PrintResult } from "@/lib/print-client"
 import {
   discoverNativePrinters,
   isNativeCapacitorRuntime,
   type DiscoveredNativePrinter,
 } from "@/lib/capacitor-printer"
+
+type PrinterKind = "kitchen" | "bar" | "caisse"
+
+type PrinterDiagnosticState = {
+  running: boolean
+  lastCheckedAt?: string
+  result?: PrintResult
+}
+
+const PRINTER_KINDS: Array<{ kind: PrinterKind; label: string }> = [
+  { kind: "kitchen", label: "Cuisine" },
+  { kind: "bar", label: "Bar" },
+  { kind: "caisse", label: "Caisse" },
+]
 
 export default function PrintingSettingsPage() {
   const { user, isLoading } = useAuth()
@@ -28,6 +42,11 @@ export default function PrintingSettingsPage() {
   const [isScanning, setIsScanning] = useState(false)
   const [scanMessage, setScanMessage] = useState("")
   const [discoveredPrinters, setDiscoveredPrinters] = useState<DiscoveredNativePrinter[]>([])
+  const [diagnosticsByKind, setDiagnosticsByKind] = useState<Record<PrinterKind, PrinterDiagnosticState>>({
+    kitchen: { running: false },
+    bar: { running: false },
+    caisse: { running: false },
+  })
 
   useEffect(() => {
     setIsNativeCapacitor(isNativeCapacitorRuntime())
@@ -117,21 +136,64 @@ export default function PrintingSettingsPage() {
     }
   }
 
-  const testPrint = async (kind: "kitchen" | "bar" | "caisse") => {
+  const getIpForKind = (kind: PrinterKind) => {
+    if (kind === "bar") return barIp
+    if (kind === "caisse") return caisseIp
+    return kitchenIp
+  }
+
+  const testPrint = async (kind: PrinterKind) => {
+    setDiagnosticsByKind((prev) => ({
+      ...prev,
+      [kind]: {
+        ...prev[kind],
+        running: true,
+      },
+    }))
     try {
       const result = await printTicketWithConfiguredMode({
         kind,
         ticket: sampleTicket(kind),
         modeOverride: printMode,
-        ipOverride: kind === "bar" ? barIp : kind === "caisse" ? caisseIp : kitchenIp,
+        ipOverride: getIpForKind(kind),
       })
+      setDiagnosticsByKind((prev) => ({
+        ...prev,
+        [kind]: {
+          running: false,
+          lastCheckedAt: new Date().toISOString(),
+          result,
+        },
+      }))
       if (result.ok) {
         alert(`Test d'impression envoye (mode: ${result.mode})`)
       } else {
         alert(result.message || "Echec du test d'impression")
       }
-    } catch {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Echec du test d'impression"
+      setDiagnosticsByKind((prev) => ({
+        ...prev,
+        [kind]: {
+          running: false,
+          lastCheckedAt: new Date().toISOString(),
+          result: {
+            ok: false,
+            mode: printMode,
+            message,
+          },
+        },
+      }))
       alert("Echec du test d'impression")
+    }
+  }
+
+  const testAllPrinters = async () => {
+    for (const { kind } of PRINTER_KINDS) {
+      // Sequence volontaire pour obtenir un ordre de logs stable
+      // et éviter de lancer 3 jobs en parallèle sur le même réseau local.
+      // eslint-disable-next-line no-await-in-loop
+      await testPrint(kind)
     }
   }
 
@@ -155,6 +217,8 @@ export default function PrintingSettingsPage() {
     if (kind === "bar") return barIp === ip
     return caisseIp === ip
   }
+
+  const hasAnyDiagnosticRunning = PRINTER_KINDS.some(({ kind }) => diagnosticsByKind[kind].running)
 
   if (isLoading) {
     return (
@@ -351,6 +415,126 @@ export default function PrintingSettingsPage() {
                 >
                   Test Caisse
                 </Button>
+              </div>
+
+              <div className="rounded-md border border-slate-600 bg-slate-900/50 p-3 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <Label className="text-sm text-slate-300">Diagnostic impression (retour brut)</Label>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Lance un test et affiche la reponse detaillee de chaque imprimante (code, message, status,
+                      body, delai).
+                    </p>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={testAllPrinters} disabled={hasAnyDiagnosticRunning}>
+                    {hasAnyDiagnosticRunning ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Analyse...
+                      </>
+                    ) : (
+                      "Analyser les 3"
+                    )}
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  {PRINTER_KINDS.map(({ kind, label }) => {
+                    const state = diagnosticsByKind[kind]
+                    const result = state.result
+                    const diag = result?.diagnostics
+                    return (
+                      <div key={kind} className="rounded-md border border-slate-700 bg-slate-800/70 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-semibold text-white">{label}</span>
+                            {state.running ? (
+                              <span className="inline-flex items-center rounded bg-slate-700 px-2 py-0.5 text-[11px] text-slate-200">
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                Analyse
+                              </span>
+                            ) : result ? (
+                              result.ok ? (
+                                <span className="inline-flex items-center rounded bg-green-900/40 px-2 py-0.5 text-[11px] text-green-300 border border-green-700/60">
+                                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                                  OK
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded bg-red-900/40 px-2 py-0.5 text-[11px] text-red-300 border border-red-700/60">
+                                  <XCircle className="h-3 w-3 mr-1" />
+                                  Erreur
+                                </span>
+                              )
+                            ) : (
+                              <span className="inline-flex items-center rounded bg-slate-700 px-2 py-0.5 text-[11px] text-slate-300">
+                                Non teste
+                              </span>
+                            )}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => testPrint(kind)}
+                            disabled={state.running}
+                          >
+                            Tester
+                          </Button>
+                        </div>
+
+                        <div className="text-[11px] text-slate-400">
+                          IP: {getIpForKind(kind) || "non definie"} • Mode: {printMode}
+                        </div>
+
+                        {state.lastCheckedAt && (
+                          <div className="text-[11px] text-slate-400">
+                            Dernier test: {new Date(state.lastCheckedAt).toLocaleTimeString("fr-FR", { hour12: false })}
+                          </div>
+                        )}
+
+                        {result?.message && (
+                          <div className="text-xs text-slate-200 border border-slate-700 rounded p-2 bg-slate-900/70">
+                            {result.message}
+                          </div>
+                        )}
+
+                        {diag && (
+                          <div className="space-y-2">
+                            <div className="text-[11px] text-slate-400">
+                              Runtime: {diag.runtime} • Duree: {diag.durationMs} ms
+                            </div>
+                            {diag.entries.length > 0 ? (
+                              <div className="space-y-2">
+                                {diag.entries.map((entry, index) => (
+                                  <div key={`${kind}-${index}`} className="rounded border border-slate-700 bg-slate-900/70 p-2 space-y-1">
+                                    <div className="text-[11px] text-slate-300">
+                                      {entry.step} • {entry.ok ? "OK" : "KO"}
+                                      {typeof entry.durationMs === "number" ? ` • ${entry.durationMs} ms` : ""}
+                                    </div>
+                                    <div className="text-[11px] text-slate-400">
+                                      {new Date(entry.at).toLocaleTimeString("fr-FR", { hour12: false })}
+                                      {typeof entry.status === "number" ? ` • status ${entry.status}` : ""}
+                                      {entry.code ? ` • code ${entry.code}` : ""}
+                                    </div>
+                                    {entry.message && <div className="text-[11px] text-slate-200">{entry.message}</div>}
+                                    {entry.bodySnippet && (
+                                      <pre className="text-[10px] leading-4 text-slate-300 whitespace-pre-wrap break-all rounded bg-black/30 p-2">
+                                        {entry.bodySnippet}
+                                      </pre>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="text-[11px] text-slate-500">Aucun detail technique remonte.</div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           </CardContent>
