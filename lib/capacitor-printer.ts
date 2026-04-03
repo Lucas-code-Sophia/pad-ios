@@ -26,6 +26,7 @@ type PrinterBridgePlugin = {
     ip: string
     port?: number
     lines: string[]
+    styleHints?: string[]
     cut?: boolean
     encoding?: string
     timeoutMs?: number
@@ -190,6 +191,7 @@ export async function nativePrintEscPos(payload: {
   ip: string
   port?: number
   lines: string[]
+  styleHints?: string[]
   cut?: boolean
   encoding?: string
   timeoutMs?: number

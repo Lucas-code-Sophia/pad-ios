@@ -226,6 +226,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             ])
             return
         }
+        let styleHints = call.getArray("styleHints", String.self) ?? []
 
         let timeoutMs = max(call.getInt("timeoutMs") ?? 7000, 1000)
         let cut = call.getBool("cut") ?? true
@@ -237,7 +238,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
                 let output = try self.openEscPosOutputStream(host: ip, port: port, timeoutMs: timeoutMs)
                 defer { self.closeEscPosOutputStream(output) }
 
-                let payload = self.buildEscPosPayload(lines: rawLines, cut: cut, encodingName: encoding)
+                let payload = self.buildEscPosPayload(lines: rawLines, styleHints: styleHints, cut: cut, encodingName: encoding)
                 try self.writeEscPosData(payload, to: output, timeoutMs: timeoutMs)
 
                 self.resolve(call, data: ["ok": true])
@@ -561,7 +562,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         return lowerMessage.contains("connection reset") || lowerMessage.contains("reset by peer")
     }
 
-    private func buildEscPosPayload(lines: [String], cut: Bool, encodingName: String) -> Data {
+    private func buildEscPosPayload(lines: [String], styleHints: [String], cut: Bool, encodingName: String) -> Data {
         let normalizedEncoding = encodingName.lowercased()
         var payload = Data([0x1B, 0x40]) // ESC @ init
 
@@ -570,13 +571,12 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             payload.append(contentsOf: [0x1B, 0x74, 0x00]) // ESC t 0
         }
 
-        for rawLine in lines {
-            let parsed = parseEscPosMetaLine(rawLine)
-            let line = parsed.content
+        for (index, line) in lines.enumerated() {
+            let parsedStyleHint = index < styleHints.count ? parseEscPosStyleHint(styleHints[index]) : nil
             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            let isLarge = parsed.isLarge ?? isEscPosLargeLine(trimmed)
-            let isBold = parsed.isBold ?? isEscPosBoldLine(trimmed)
-            let alignByte = parsed.alignByte ?? 0x00
+            let isLarge = parsedStyleHint?.isLarge ?? isEscPosLargeLine(trimmed)
+            let isBold = parsedStyleHint?.isBold ?? isEscPosBoldLine(trimmed)
+            let alignByte = parsedStyleHint?.alignByte ?? 0x00
 
             // Font sizing: normal = x1, large = approx x1.5 (double height only).
             let sizeByte: UInt8 = isLarge ? 0x01 : 0x00
@@ -601,20 +601,12 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         return payload
     }
 
-    private func parseEscPosMetaLine(_ rawLine: String) -> (content: String, isLarge: Bool?, isBold: Bool?, alignByte: UInt8?) {
-        guard rawLine.hasPrefix("[[SP|"), let endRange = rawLine.range(of: "]]") else {
-            return (rawLine, nil, nil, nil)
-        }
-
-        let metaStart = rawLine.index(rawLine.startIndex, offsetBy: 5)
-        let meta = String(rawLine[metaStart..<endRange.lowerBound])
-        let content = String(rawLine[endRange.upperBound...])
-
+    private func parseEscPosStyleHint(_ hint: String) -> (isLarge: Bool?, isBold: Bool?, alignByte: UInt8?) {
         var isLarge: Bool?
         var isBold: Bool?
         var alignByte: UInt8?
 
-        for token in meta.split(separator: ";") {
+        for token in hint.split(separator: ";") {
             let pair = token.split(separator: "=", maxSplits: 1).map(String.init)
             guard pair.count == 2 else { continue }
             let key = pair[0]
@@ -633,7 +625,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
 
-        return (content, isLarge, isBold, alignByte)
+        return (isLarge, isBold, alignByte)
     }
 
     private func isEscPosLargeLine(_ line: String) -> Bool {

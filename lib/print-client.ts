@@ -361,32 +361,42 @@ const resolveEscPosSize = (line: EposTicket["lines"][number]): "normal" | "large
   return scale >= 1.25 ? "large" : "normal"
 }
 
-const encodeEscPosMetaLine = (
-  content: string,
-  options: { size?: "normal" | "large"; bold?: boolean; align?: "left" | "center" | "right" } = {},
-) => {
+const encodeEscPosStyleHint = (options: {
+  size?: "normal" | "large"
+  bold?: boolean
+  align?: "left" | "center" | "right"
+}) => {
   const size = options.size || "normal"
   const bold = options.bold ? "1" : "0"
   const align = options.align || "left"
-  return `[[SP|s=${size};b=${bold};a=${align}]]${content}`
+  return `s=${size};b=${bold};a=${align}`
 }
 
-const toEscPosLines = (ticket: EposTicket): string[] => {
+const toEscPosPayload = (
+  ticket: EposTicket,
+): {
+  lines: string[]
+  styleHints: string[]
+} => {
   const lines: string[] = []
+  const styleHints: string[] = []
   if (ticket.title) {
-    lines.push(encodeEscPosMetaLine(ticket.title, { bold: true, align: "center" }))
-    lines.push(encodeEscPosMetaLine("", { align: "center" }))
+    lines.push(ticket.title)
+    styleHints.push(encodeEscPosStyleHint({ bold: true, align: "center" }))
+    lines.push("")
+    styleHints.push(encodeEscPosStyleHint({ align: "center" }))
   }
   for (const line of ticket.lines) {
-    lines.push(
-      encodeEscPosMetaLine(line.content, {
+    lines.push(line.content)
+    styleHints.push(
+      encodeEscPosStyleHint({
         size: resolveEscPosSize(line),
         bold: line.bold,
         align: line.align,
       }),
     )
   }
-  return lines
+  return { lines, styleHints }
 }
 
 const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket): Promise<PrintResult> => {
@@ -436,12 +446,13 @@ const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket):
   }
 
   try {
-    const lines = toEscPosLines(ticket)
+    const payload = toEscPosPayload(ticket)
     const printStart = Date.now()
     const nativeResult = await nativePrintEscPos({
       ip,
       port: 9100,
-      lines,
+      lines: payload.lines,
+      styleHints: payload.styleHints,
       cut: true,
       encoding: "cp437",
     })
@@ -454,6 +465,32 @@ const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket):
       bodySnippet: bodyToSnippet(nativeResult.body),
       durationMs: Date.now() - printStart,
     })
+
+    if (!nativeResult.ok) {
+      const code = String(nativeResult.code || "").toLowerCase()
+      const message = String(nativeResult.message || "").toLowerCase()
+      const isTimeout = code === "timeout" || message.includes("delai depasse") || message.includes("timed out")
+      if (isTimeout) {
+        const probeStart = Date.now()
+        const probe = await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 1200 })
+        diagnostics.addEntry({
+          step: "escpos_timeout_probe",
+          ok: probe.ok && probe.reachable,
+          code: probe.code,
+          message: probe.message,
+          durationMs: Date.now() - probeStart,
+        })
+        if (probe.ok && probe.reachable) {
+          diagnostics.addEntry({
+            step: "escpos_timeout_assumed_ok",
+            ok: true,
+            code: "assumed_ok_after_timeout",
+            message: "Impression consideree comme envoyee (timeout post-envoi, imprimante joignable).",
+          })
+          return { ok: true, mode: "escpos_tcp", diagnostics: diagnostics.finalize() }
+        }
+      }
+    }
 
     if (nativeResult.ok) return { ok: true, mode: "escpos_tcp", diagnostics: diagnostics.finalize() }
     return {
