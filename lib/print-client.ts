@@ -19,6 +19,9 @@ export type PrintSettings = {
   bar_ip: string
   caisse_ip: string
   print_mode: PrintMode
+  kitchen_print_mode: PrintMode
+  bar_print_mode: PrintMode
+  caisse_print_mode: PrintMode
 }
 
 export type PrintResult = {
@@ -97,7 +100,15 @@ const createDiagnostics = (kind: PrintKind, mode: PrintMode, ip?: string) => {
 
 const toNativeRole = (kind: PrintKind): NativePrinterRole => kind
 
-const DEFAULT_PRINT_SETTINGS: PrintSettings = { kitchen_ip: "", bar_ip: "", caisse_ip: "", print_mode: "server" }
+const DEFAULT_PRINT_SETTINGS: PrintSettings = {
+  kitchen_ip: "",
+  bar_ip: "",
+  caisse_ip: "",
+  print_mode: "server",
+  kitchen_print_mode: "server",
+  bar_print_mode: "server",
+  caisse_print_mode: "server",
+}
 
 const fetchPrintSettings = async (): Promise<PrintSettings> => {
   const response = await fetch("/api/admin/print-settings", {
@@ -110,11 +121,18 @@ const fetchPrintSettings = async (): Promise<PrintSettings> => {
   }
 
   const json = await response.json()
+  const globalMode = normalizePrintMode(json?.print_mode)
+  const kitchenMode = normalizePrintMode(json?.kitchen_print_mode ?? globalMode)
+  const barMode = normalizePrintMode(json?.bar_print_mode ?? globalMode)
+  const caisseMode = normalizePrintMode(json?.caisse_print_mode ?? globalMode)
   return {
     kitchen_ip: String(json?.kitchen_ip || ""),
     bar_ip: String(json?.bar_ip || ""),
     caisse_ip: String(json?.caisse_ip || ""),
-    print_mode: normalizePrintMode(json?.print_mode),
+    print_mode: globalMode,
+    kitchen_print_mode: kitchenMode,
+    bar_print_mode: barMode,
+    caisse_print_mode: caisseMode,
   }
 }
 
@@ -437,13 +455,30 @@ type PrintTicketParams = {
   ipOverride?: string
 }
 
+const getKindPrintModeFromSettings = (kind: PrintKind, settings: PrintSettings): PrintMode => {
+  if (kind === "bar") return settings.bar_print_mode || settings.print_mode
+  if (kind === "caisse" || kind === "suites") return settings.caisse_print_mode || settings.print_mode
+  return settings.kitchen_print_mode || settings.print_mode
+}
+
+export const getPrintModeForKind = (
+  kind: PrintKind,
+  settings: Pick<PrintSettings, "print_mode" | "kitchen_print_mode" | "bar_print_mode" | "caisse_print_mode">,
+  modeOverride?: PrintMode,
+): PrintMode => {
+  if (modeOverride) return modeOverride
+  if (kind === "bar") return settings.bar_print_mode || settings.print_mode
+  if (kind === "caisse" || kind === "suites") return settings.caisse_print_mode || settings.print_mode
+  return settings.kitchen_print_mode || settings.print_mode
+}
+
 export async function printTicketWithConfiguredMode(params: PrintTicketParams): Promise<PrintResult> {
   const { kind, modeOverride, ipOverride } = params
   const ticket = params.ticket || sampleTicket(kind)
 
   const settings = await getConfiguredPrintSettings()
 
-  const mode = modeOverride || settings.print_mode
+  const mode = modeOverride || getKindPrintModeFromSettings(kind, settings)
   const ipFromSettings =
     kind === "bar" ? settings.bar_ip : kind === "caisse" || kind === "suites" ? settings.caisse_ip : settings.kitchen_ip
   const resolvedIp = ipOverride || ipFromSettings

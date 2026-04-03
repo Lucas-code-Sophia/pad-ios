@@ -9,7 +9,7 @@ import { ArrowLeft, CheckCircle2, Loader2, Printer, XCircle } from "lucide-react
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { sampleTicket } from "@/lib/epos"
-import { printTicketWithConfiguredMode, type PrintMode, type PrintResult } from "@/lib/print-client"
+import { getPrintModeForKind, printTicketWithConfiguredMode, type PrintMode, type PrintResult } from "@/lib/print-client"
 import {
   discoverNativePrinters,
   isNativeCapacitorRuntime,
@@ -36,7 +36,9 @@ export default function PrintingSettingsPage() {
   const [kitchenIp, setKitchenIp] = useState("")
   const [barIp, setBarIp] = useState("")
   const [caisseIp, setCaisseIp] = useState("")
-  const [printMode, setPrintMode] = useState<PrintMode>("server")
+  const [kitchenPrintMode, setKitchenPrintMode] = useState<PrintMode>("server")
+  const [barPrintMode, setBarPrintMode] = useState<PrintMode>("server")
+  const [caissePrintMode, setCaissePrintMode] = useState<PrintMode>("server")
   const [savingPrint, setSavingPrint] = useState(false)
   const [isNativeCapacitor, setIsNativeCapacitor] = useState(false)
   const [isScanning, setIsScanning] = useState(false)
@@ -72,9 +74,12 @@ export default function PrintingSettingsPage() {
         setKitchenIp(data.kitchen_ip || "")
         setBarIp(data.bar_ip || "")
         setCaisseIp(data.caisse_ip || "")
-        const modeFromDb: PrintMode =
-          data.print_mode === "direct_epos" || data.print_mode === "escpos_tcp" ? data.print_mode : "server"
-        setPrintMode(modeFromDb)
+        const normalizeMode = (value: unknown): PrintMode =>
+          value === "direct_epos" || value === "escpos_tcp" ? value : "server"
+        const fallbackGlobalMode = normalizeMode(data.print_mode)
+        setKitchenPrintMode(normalizeMode(data.kitchen_print_mode ?? fallbackGlobalMode))
+        setBarPrintMode(normalizeMode(data.bar_print_mode ?? fallbackGlobalMode))
+        setCaissePrintMode(normalizeMode(data.caisse_print_mode ?? fallbackGlobalMode))
       }
     } catch (error) {
       console.error("[v0] Error fetching print settings:", error)
@@ -91,7 +96,9 @@ export default function PrintingSettingsPage() {
           kitchen_ip: kitchenIp,
           bar_ip: barIp,
           caisse_ip: caisseIp,
-          print_mode: printMode,
+          kitchen_print_mode: kitchenPrintMode,
+          bar_print_mode: barPrintMode,
+          caisse_print_mode: caissePrintMode,
         }),
       })
       if (!res.ok) {
@@ -142,6 +149,20 @@ export default function PrintingSettingsPage() {
     return kitchenIp
   }
 
+  const getModeForKind = (kind: PrinterKind): PrintMode =>
+    getPrintModeForKind(kind, {
+      print_mode: "server",
+      kitchen_print_mode: kitchenPrintMode,
+      bar_print_mode: barPrintMode,
+      caisse_print_mode: caissePrintMode,
+    })
+
+  const applyModeToAll = (mode: PrintMode) => {
+    setKitchenPrintMode(mode)
+    setBarPrintMode(mode)
+    setCaissePrintMode(mode)
+  }
+
   const testPrint = async (kind: PrinterKind) => {
     setDiagnosticsByKind((prev) => ({
       ...prev,
@@ -154,7 +175,7 @@ export default function PrintingSettingsPage() {
       const result = await printTicketWithConfiguredMode({
         kind,
         ticket: sampleTicket(kind),
-        modeOverride: printMode,
+        modeOverride: getModeForKind(kind),
         ipOverride: getIpForKind(kind),
       })
       setDiagnosticsByKind((prev) => ({
@@ -179,7 +200,7 @@ export default function PrintingSettingsPage() {
           lastCheckedAt: new Date().toISOString(),
           result: {
             ok: false,
-            mode: printMode,
+            mode: getModeForKind(kind),
             message,
           },
         },
@@ -272,28 +293,40 @@ export default function PrintingSettingsPage() {
           <CardContent className="space-y-3 p-4 sm:p-6 pt-0">
             <div className="grid grid-cols-1 gap-3">
               <div>
-                <Label className="text-sm text-slate-300">Mode d'impression</Label>
-                <select
-                  value={printMode}
-                  onChange={(e) => setPrintMode(e.target.value as PrintMode)}
-                  className="w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
-                >
-                  <option value="server">Serveur (Vercel)</option>
-                  <option value="direct_epos">Direct Epson (LAN local)</option>
-                  <option value="escpos_tcp">ESC/POS TCP (9100)</option>
-                </select>
+                <Label className="text-sm text-slate-300">Mode d'impression (par imprimante)</Label>
                 <div className="text-xs text-slate-400 mt-1 space-y-1">
-                  <p>Reglage global partage: ce mode s'applique a tous les pads de l'equipe.</p>
-                  {printMode === "escpos_tcp" ? (
-                    <>
-                      <p>ESC/POS TCP: port fixe 9100, encodage CP437, sans fallback.</p>
-                      <p>Mode disponible uniquement dans l'app native iOS/Android.</p>
-                    </>
-                  ) : isNativeCapacitor ? (
-                    <p>Mode app native actif. Les tests partent en LAN local selon le mode choisi.</p>
-                  ) : (
-                    <p>Direct Epson doit etre lance depuis un appareil sur le Wi-Fi local du restaurant.</p>
-                  )}
+                  <p>Reglage global partage: ce parametrage s'applique a tous les pads de l'equipe.</p>
+                  <p>ESC/POS TCP: port fixe 9100, encodage CP437, sans fallback.</p>
+                  {!isNativeCapacitor && <p>Le mode natif (direct/escpos) doit etre teste depuis l'app iOS/Android.</p>}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => applyModeToAll("direct_epos")}
+                    className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
+                  >
+                    Tout en Direct Epson
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => applyModeToAll("escpos_tcp")}
+                    className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
+                  >
+                    Tout en ESC/POS
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => applyModeToAll("server")}
+                    className="bg-slate-700 border-slate-600 text-white hover:bg-slate-600"
+                  >
+                    Tout en Serveur
+                  </Button>
                 </div>
               </div>
               {isNativeCapacitor && (
@@ -363,6 +396,18 @@ export default function PrintingSettingsPage() {
                   className="bg-slate-700 border-slate-600 text-sm"
                   placeholder="192.168.1.30"
                 />
+                <div className="mt-2">
+                  <Label className="text-xs text-slate-400">Mode Cuisine</Label>
+                  <select
+                    value={kitchenPrintMode}
+                    onChange={(e) => setKitchenPrintMode(e.target.value as PrintMode)}
+                    className="mt-1 w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
+                  >
+                    <option value="server">Serveur (Vercel)</option>
+                    <option value="direct_epos">Direct Epson (LAN local)</option>
+                    <option value="escpos_tcp">ESC/POS TCP (9100)</option>
+                  </select>
+                </div>
               </div>
               <div>
                 <Label className="text-sm text-slate-300">IP Bar</Label>
@@ -372,6 +417,18 @@ export default function PrintingSettingsPage() {
                   className="bg-slate-700 border-slate-600 text-sm"
                   placeholder="192.168.1.31"
                 />
+                <div className="mt-2">
+                  <Label className="text-xs text-slate-400">Mode Bar</Label>
+                  <select
+                    value={barPrintMode}
+                    onChange={(e) => setBarPrintMode(e.target.value as PrintMode)}
+                    className="mt-1 w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
+                  >
+                    <option value="server">Serveur (Vercel)</option>
+                    <option value="direct_epos">Direct Epson (LAN local)</option>
+                    <option value="escpos_tcp">ESC/POS TCP (9100)</option>
+                  </select>
+                </div>
               </div>
               <div>
                 <Label className="text-sm text-slate-300">IP Caisse</Label>
@@ -381,6 +438,18 @@ export default function PrintingSettingsPage() {
                   className="bg-slate-700 border-slate-600 text-sm"
                   placeholder="192.168.1.32"
                 />
+                <div className="mt-2">
+                  <Label className="text-xs text-slate-400">Mode Caisse</Label>
+                  <select
+                    value={caissePrintMode}
+                    onChange={(e) => setCaissePrintMode(e.target.value as PrintMode)}
+                    className="mt-1 w-full bg-slate-700 border border-slate-600 rounded-md px-3 py-2 text-sm text-white"
+                  >
+                    <option value="server">Serveur (Vercel)</option>
+                    <option value="direct_epos">Direct Epson (LAN local)</option>
+                    <option value="escpos_tcp">ESC/POS TCP (9100)</option>
+                  </select>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -484,7 +553,7 @@ export default function PrintingSettingsPage() {
                         </div>
 
                         <div className="text-[11px] text-slate-400">
-                          IP: {getIpForKind(kind) || "non definie"} • Mode: {printMode}
+                          IP: {getIpForKind(kind) || "non definie"} • Mode: {getModeForKind(kind)}
                         </div>
 
                         {state.lastCheckedAt && (

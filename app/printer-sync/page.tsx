@@ -37,6 +37,15 @@ const PRINTER_ROLES: Array<{ role: PrinterRole; label: string }> = [
   { role: "caisse", label: "Caisse" },
 ]
 
+const normalizePrintMode = (value: unknown): PrintMode =>
+  value === "direct_epos" || value === "escpos_tcp" ? value : "server"
+
+const createInitialModes = (): Record<PrinterRole, PrintMode> => ({
+  kitchen: "server",
+  bar: "server",
+  caisse: "server",
+})
+
 export default function PrinterSyncPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
@@ -45,7 +54,7 @@ export default function PrinterSyncPage() {
   const [kitchenIp, setKitchenIp] = useState("")
   const [barIp, setBarIp] = useState("")
   const [caisseIp, setCaisseIp] = useState("")
-  const [printMode, setPrintMode] = useState<PrintMode>("server")
+  const [printerModes, setPrinterModes] = useState<Record<PrinterRole, PrintMode>>(createInitialModes)
 
   const [loadingSettings, setLoadingSettings] = useState(true)
   const [savingSettings, setSavingSettings] = useState(false)
@@ -77,14 +86,14 @@ export default function PrinterSyncPage() {
 
   const runConnectivityCheck = async (
     overrides?: { kitchen: string; bar: string; caisse: string },
-    modeOverride?: PrintMode,
+    modeOverride?: Record<PrinterRole, PrintMode>,
   ) => {
     const targetIps = overrides || {
       kitchen: kitchenIp,
       bar: barIp,
       caisse: caisseIp,
     }
-    const activeMode = modeOverride || printMode
+    const activeModes = modeOverride || printerModes
 
     setCheckingAll(true)
     setPrinterStatuses({
@@ -121,7 +130,7 @@ export default function PrinterSyncPage() {
           }
 
           const result =
-            activeMode === "escpos_tcp"
+            activeModes[role] === "escpos_tcp"
               ? await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 4000 })
               : await nativeGetPrinterStatus({ ip })
           if (result.ok && result.reachable) {
@@ -129,7 +138,7 @@ export default function PrinterSyncPage() {
               role,
               {
                 reachable: true,
-                message: activeMode === "escpos_tcp" ? "Connectee (TCP 9100)" : "Connectee",
+                message: activeModes[role] === "escpos_tcp" ? "Connectee (TCP 9100)" : "Connectee",
                 checking: false,
               },
             ] as const
@@ -178,14 +187,18 @@ export default function PrinterSyncPage() {
         bar: String(data?.bar_ip || ""),
         caisse: String(data?.caisse_ip || ""),
       }
-      const modeFromApi: PrintMode =
-        data?.print_mode === "direct_epos" || data?.print_mode === "escpos_tcp" ? data.print_mode : "server"
+      const fallbackMode = normalizePrintMode(data?.print_mode)
+      const nextModes: Record<PrinterRole, PrintMode> = {
+        kitchen: normalizePrintMode(data?.kitchen_print_mode ?? fallbackMode),
+        bar: normalizePrintMode(data?.bar_print_mode ?? fallbackMode),
+        caisse: normalizePrintMode(data?.caisse_print_mode ?? fallbackMode),
+      }
 
       setKitchenIp(nextIps.kitchen)
       setBarIp(nextIps.bar)
       setCaisseIp(nextIps.caisse)
-      setPrintMode(modeFromApi)
-      await runConnectivityCheck(nextIps, modeFromApi)
+      setPrinterModes(nextModes)
+      await runConnectivityCheck(nextIps, nextModes)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Echec de chargement"
       setScanMessage(message)
@@ -218,7 +231,13 @@ export default function PrinterSyncPage() {
           kitchen_ip: kitchenIp.trim(),
           bar_ip: barIp.trim(),
           caisse_ip: caisseIp.trim(),
-          print_mode: printMode,
+          kitchen_print_mode: printerModes.kitchen,
+          bar_print_mode: printerModes.bar,
+          caisse_print_mode: printerModes.caisse,
+          print_mode:
+            printerModes.kitchen === printerModes.bar && printerModes.bar === printerModes.caisse
+              ? printerModes.kitchen
+              : "server",
         }),
       })
 
@@ -416,12 +435,7 @@ export default function PrinterSyncPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-slate-400">
-              Mode global actif:{" "}
-              {printMode === "escpos_tcp"
-                ? "ESC/POS TCP (9100)"
-                : printMode === "direct_epos"
-                  ? "Direct Epson (LAN local)"
-                  : "Serveur (Vercel)"}
+              Modes actifs: Cuisine {printerModes.kitchen} • Bar {printerModes.bar} • Caisse {printerModes.caisse}
             </p>
             <div>
               <Label className="text-slate-300 text-sm">Cuisine</Label>

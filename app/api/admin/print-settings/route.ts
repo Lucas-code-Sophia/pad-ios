@@ -8,6 +8,15 @@ const normalizePrintMode = (value: unknown): "server" | "direct_epos" | "escpos_
   return "server"
 }
 
+const computeGlobalMode = (
+  kitchenMode: "server" | "direct_epos" | "escpos_tcp",
+  barMode: "server" | "direct_epos" | "escpos_tcp",
+  caisseMode: "server" | "direct_epos" | "escpos_tcp",
+): "server" | "direct_epos" | "escpos_tcp" => {
+  if (kitchenMode === barMode && barMode === caisseMode) return kitchenMode
+  return "server"
+}
+
 export async function GET() {
   try {
     const supabase = await createClient()
@@ -20,11 +29,18 @@ export async function GET() {
     if (error && error.code !== "PGRST116") throw error
 
     const rawValue = (data?.setting_value as any) || {}
+    const legacyGlobalMode = normalizePrintMode(rawValue.print_mode)
+    const kitchenMode = normalizePrintMode(rawValue.kitchen_print_mode ?? legacyGlobalMode)
+    const barMode = normalizePrintMode(rawValue.bar_print_mode ?? legacyGlobalMode)
+    const caisseMode = normalizePrintMode(rawValue.caisse_print_mode ?? legacyGlobalMode)
     const value = {
       kitchen_ip: rawValue.kitchen_ip || "",
       bar_ip: rawValue.bar_ip || "",
       caisse_ip: rawValue.caisse_ip || "",
-      print_mode: normalizePrintMode(rawValue.print_mode),
+      print_mode: computeGlobalMode(kitchenMode, barMode, caisseMode),
+      kitchen_print_mode: kitchenMode,
+      bar_print_mode: barMode,
+      caisse_print_mode: caisseMode,
     }
     return NextResponse.json(value)
   } catch (error) {
@@ -36,7 +52,20 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { kitchen_ip, bar_ip, caisse_ip, print_mode } = body || {}
+    const { kitchen_ip, bar_ip, caisse_ip } = body || {}
+    const legacyGlobalMode = normalizePrintMode(body?.print_mode)
+    const hasPerStationModes =
+      body?.kitchen_print_mode !== undefined ||
+      body?.bar_print_mode !== undefined ||
+      body?.caisse_print_mode !== undefined
+
+    const kitchenMode = hasPerStationModes
+      ? normalizePrintMode(body?.kitchen_print_mode ?? legacyGlobalMode)
+      : legacyGlobalMode
+    const barMode = hasPerStationModes ? normalizePrintMode(body?.bar_print_mode ?? legacyGlobalMode) : legacyGlobalMode
+    const caisseMode = hasPerStationModes
+      ? normalizePrintMode(body?.caisse_print_mode ?? legacyGlobalMode)
+      : legacyGlobalMode
 
     const supabase = await createClient()
 
@@ -49,7 +78,10 @@ export async function POST(request: Request) {
             kitchen_ip: kitchen_ip || "",
             bar_ip: bar_ip || "",
             caisse_ip: caisse_ip || "",
-            print_mode: normalizePrintMode(print_mode),
+            print_mode: computeGlobalMode(kitchenMode, barMode, caisseMode),
+            kitchen_print_mode: kitchenMode,
+            bar_print_mode: barMode,
+            caisse_print_mode: caisseMode,
           },
           updated_at: new Date().toISOString(),
         },

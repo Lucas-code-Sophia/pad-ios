@@ -17,7 +17,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { useOfflineManager } from "@/lib/offline-manager"
 import { OfflineIndicator } from "@/components/offline-indicator"
 import { getMenuButtonColorClasses } from "@/lib/menu-colors"
-import { getConfiguredPrintSettings, printTicketWithConfiguredMode, type PrintMode } from "@/lib/print-client"
+import { getConfiguredPrintSettings, getPrintModeForKind, printTicketWithConfiguredMode, type PrintMode } from "@/lib/print-client"
 import { isNativeCapacitorRuntime } from "@/lib/capacitor-printer"
 import type { EposTicket } from "@/lib/epos"
 import { getItemDisplayInfo } from "@/lib/item-display"
@@ -1537,14 +1537,20 @@ export default function OrderPage() {
     }
 
     const printSettings = await getConfiguredPrintSettings()
-    const activePrintMode = printSettings.print_mode
-    const isEscPosMode = activePrintMode === "escpos_tcp"
+    const dispatchStations = (["kitchen", "bar"] as DispatchStation[]).filter((station) =>
+      Boolean(buildStationTicket(station, itemsToSend, itemsToKeep)),
+    )
+    const escPosStations = dispatchStations.filter(
+      (station) => getPrintModeForKind(station, printSettings) === "escpos_tcp",
+    )
+    const hasEscPosStations = escPosStations.length > 0
 
-    if (isEscPosMode && !isNativeCapacitorRuntime()) {
+    if (hasEscPosStations && !isNativeCapacitorRuntime()) {
       showSendFeedback({
         title: "Mode ESC/POS indisponible",
         lines: [
-          "Le mode global ESC/POS TCP (9100) fonctionne uniquement dans l'app native iOS/Android.",
+          "Au moins une station est configuree en ESC/POS TCP (9100).",
+          "Ce mode fonctionne uniquement dans l'app native iOS/Android.",
           "Commande non envoyee: impression requise avant envoi.",
         ],
         variant: "error",
@@ -1553,11 +1559,11 @@ export default function OrderPage() {
     }
 
     if (!isOnline) {
-      if (isEscPosMode) {
+      if (hasEscPosStations) {
         showSendFeedback({
           title: "Impression requise",
           lines: [
-            "Mode ESC/POS actif: impossible d'envoyer hors ligne.",
+            "Au moins une station ESC/POS est active: impossible d'envoyer hors ligne.",
             "Commande conservee en attente sur la table.",
           ],
           variant: "warning",
@@ -1581,14 +1587,15 @@ export default function OrderPage() {
     try {
       let printSummary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
 
-      if (isEscPosMode) {
-        printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep, { modeOverride: "escpos_tcp" })
-        if (printSummary.failedStations.length > 0) {
+      if (hasEscPosStations) {
+        printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep)
+        const blockingFailures = printSummary.failedStations.filter(({ station }) => escPosStations.includes(station))
+        if (blockingFailures.length > 0) {
           showSendFeedback({
             title: "Impression requise",
             lines: [
               "Commande non envoyee: au moins une impression ESC/POS a echoue.",
-              ...printSummary.failedStations.map(
+              ...blockingFailures.map(
                 ({ station, message }) => `Impression ${stationLabel(station)} echouee: ${message}`,
               ),
             ],
@@ -1605,7 +1612,7 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        if (!isEscPosMode) {
+        if (!hasEscPosStations) {
           printSummary = await printDispatchedTickets(itemsToSend, itemsToKeep)
         }
 
@@ -1649,7 +1656,7 @@ export default function OrderPage() {
       }
     } catch (error) {
       console.error("[v0] Error sending order:", error)
-      if (isEscPosMode) {
+      if (hasEscPosStations) {
         const message = error instanceof Error ? error.message : "Erreur reseau"
         showSendFeedback({
           title: "Commande non envoyee",
@@ -1737,14 +1744,20 @@ export default function OrderPage() {
       }
 
       const printSettings = await getConfiguredPrintSettings()
-      const activePrintMode = printSettings.print_mode
-      const isEscPosMode = activePrintMode === "escpos_tcp"
+      const dispatchStations = (["kitchen", "bar"] as DispatchStation[]).filter((station) =>
+        Boolean(buildStationTicket(station, toFollowItems, remainingItems)),
+      )
+      const escPosStations = dispatchStations.filter(
+        (station) => getPrintModeForKind(station, printSettings) === "escpos_tcp",
+      )
+      const hasEscPosStations = escPosStations.length > 0
 
-      if (isEscPosMode && !isNativeCapacitorRuntime()) {
+      if (hasEscPosStations && !isNativeCapacitorRuntime()) {
         showSendFeedback({
           title: "Mode ESC/POS indisponible",
           lines: [
-            "Le mode global ESC/POS TCP (9100) fonctionne uniquement dans l'app native iOS/Android.",
+            "Au moins une station est configuree en ESC/POS TCP (9100).",
+            "Ce mode fonctionne uniquement dans l'app native iOS/Android.",
             "Envoi de la suite bloque.",
           ],
           variant: "error",
@@ -1752,11 +1765,11 @@ export default function OrderPage() {
         return
       }
 
-      if (!isOnline && isEscPosMode) {
+      if (!isOnline && hasEscPosStations) {
         showSendFeedback({
           title: "Impression requise",
           lines: [
-            "Mode ESC/POS actif: impossible d'envoyer la suite hors ligne.",
+            "Au moins une station ESC/POS est active: impossible d'envoyer la suite hors ligne.",
             "Les articles restent en attente sur la table.",
           ],
           variant: "warning",
@@ -1765,14 +1778,15 @@ export default function OrderPage() {
       }
 
       let printSummary: DispatchPrintSummary = { printedStations: [], failedStations: [] }
-      if (isEscPosMode) {
-        printSummary = await printDispatchedTickets(toFollowItems, remainingItems, { modeOverride: "escpos_tcp" })
-        if (printSummary.failedStations.length > 0) {
+      if (hasEscPosStations) {
+        printSummary = await printDispatchedTickets(toFollowItems, remainingItems)
+        const blockingFailures = printSummary.failedStations.filter(({ station }) => escPosStations.includes(station))
+        if (blockingFailures.length > 0) {
           showSendFeedback({
             title: "Impression requise",
             lines: [
               "Envoi de la suite annule: au moins une impression ESC/POS a echoue.",
-              ...printSummary.failedStations.map(
+              ...blockingFailures.map(
                 ({ station, message }) => `Impression ${stationLabel(station)} echouee: ${message}`,
               ),
             ],
@@ -1789,7 +1803,7 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        if (!isEscPosMode) {
+        if (!hasEscPosStations) {
           printSummary = await printDispatchedTickets(toFollowItems, remainingItems)
         }
 
