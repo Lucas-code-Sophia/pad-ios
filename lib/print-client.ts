@@ -412,23 +412,47 @@ const runEscPosPrint = async (_kind: PrintKind, ip: string, ticket: EposTicket):
   }
 
   try {
-    const printStart = Date.now()
-    const nativeResult = await nativePrintEscPos({
-      ip,
-      port: 9100,
-      lines: toEscPosLines(ticket),
-      cut: true,
-      encoding: "cp437",
-    })
-    diagnostics.addEntry({
-      step: "native_escpos_print",
-      ok: nativeResult.ok,
-      code: nativeResult.code,
-      message: nativeResult.message,
-      status: nativeResult.status,
-      bodySnippet: bodyToSnippet(nativeResult.body),
-      durationMs: Date.now() - printStart,
-    })
+    const lines = toEscPosLines(ticket)
+    const attemptPrint = async (step: "native_escpos_print_1" | "native_escpos_print_2") => {
+      const printStart = Date.now()
+      const nativeResult = await nativePrintEscPos({
+        ip,
+        port: 9100,
+        lines,
+        cut: true,
+        encoding: "cp437",
+      })
+      diagnostics.addEntry({
+        step,
+        ok: nativeResult.ok,
+        code: nativeResult.code,
+        message: nativeResult.message,
+        status: nativeResult.status,
+        bodySnippet: bodyToSnippet(nativeResult.body),
+        durationMs: Date.now() - printStart,
+      })
+      return nativeResult
+    }
+
+    let nativeResult = await attemptPrint("native_escpos_print_1")
+    const shouldRetry =
+      !nativeResult.ok &&
+      ["timeout", "unreachable", "offline", "unknown"].includes(String(nativeResult.code || "").toLowerCase())
+
+    if (shouldRetry) {
+      const wakeStart = Date.now()
+      const probe = await nativeCheckEscPosPort({ ip, port: 9100, timeoutMs: 1200 })
+      diagnostics.addEntry({
+        step: "escpos_probe_retry",
+        ok: probe.ok && probe.reachable,
+        code: probe.code,
+        message: probe.message,
+        durationMs: Date.now() - wakeStart,
+      })
+      await wait(220)
+      nativeResult = await attemptPrint("native_escpos_print_2")
+    }
+
     if (nativeResult.ok) return { ok: true, mode: "escpos_tcp", diagnostics: diagnostics.finalize() }
     return {
       ok: false,

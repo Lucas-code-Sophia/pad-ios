@@ -44,6 +44,8 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     private let serviceTypes = ["_ipp._tcp.", "_ipps._tcp.", "_printer._tcp.", "_pdl-datastream._tcp."]
     private let cp437CfEncoding: CFStringEncoding = 0x0400 // DOS Latin US / CP437
     private var discoverySession: PrinterDiscoverySession?
+    private var escPosInputStreams: [ObjectIdentifier: InputStream] = [:]
+    private let escPosStreamsLock = NSLock()
 
     @objc func discoverPrinters(_ call: CAPPluginCall) {
         let timeoutMs = max(call.getInt("timeoutMs") ?? 4000, 1000)
@@ -233,10 +235,11 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let output = try self.openEscPosOutputStream(host: ip, port: port, timeoutMs: timeoutMs)
-                defer { output.close() }
+                defer { self.closeEscPosOutputStream(output) }
 
                 let payload = self.buildEscPosPayload(lines: rawLines, cut: cut, encodingName: encoding)
                 try self.writeEscPosData(payload, to: output, timeoutMs: timeoutMs)
+                try self.waitForEscPosPeerSignal(from: output, timeoutMs: min(2500, timeoutMs))
 
                 self.resolve(call, data: ["ok": true])
             } catch {
@@ -267,7 +270,7 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let output = try self.openEscPosOutputStream(host: ip, port: port, timeoutMs: timeoutMs)
-                output.close()
+                self.closeEscPosOutputStream(output)
                 self.resolve(call, data: [
                     "ok": true,
                     "reachable": true
@@ -412,10 +415,14 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         CFStreamCreatePairWithSocketToHost(nil, host as CFString, UInt32(port), &readStream, &writeStream)
 
         guard let writable = writeStream?.takeRetainedValue() else {
+            _ = readStream?.takeRetainedValue()
             throw NSError(domain: "PrinterBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "Flux TCP indisponible."])
         }
 
+        let readable = readStream?.takeRetainedValue()
+        let input = readable as InputStream?
         let output = writable as OutputStream
+        input?.open()
         output.open()
 
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
@@ -426,10 +433,32 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         if output.streamStatus != .open {
             let message = output.streamError?.localizedDescription ?? "Imprimante non joignable sur TCP 9100."
             output.close()
+            input?.close()
             throw NSError(domain: "PrinterBridge", code: 2, userInfo: [NSLocalizedDescriptionKey: message])
         }
 
+        let shouldCloseNativeSocketKey = Stream.PropertyKey(
+            rawValue: kCFStreamPropertyShouldCloseNativeSocket as String
+        )
+        output.setProperty(kCFBooleanTrue, forKey: shouldCloseNativeSocketKey)
+        input?.setProperty(kCFBooleanTrue, forKey: shouldCloseNativeSocketKey)
+
+        if let input {
+            escPosStreamsLock.lock()
+            escPosInputStreams[ObjectIdentifier(output)] = input
+            escPosStreamsLock.unlock()
+        }
+
         return output
+    }
+
+    private func closeEscPosOutputStream(_ output: OutputStream) {
+        output.close()
+
+        escPosStreamsLock.lock()
+        let input = escPosInputStreams.removeValue(forKey: ObjectIdentifier(output))
+        escPosStreamsLock.unlock()
+        input?.close()
     }
 
     private func writeEscPosData(_ data: Data, to output: OutputStream, timeoutMs: Int) throws {
@@ -463,13 +492,81 @@ public class PrinterBridgePlugin: CAPPlugin, CAPBridgedPlugin {
 
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
+
+        // Laisser un court instant au socket pour pousser le buffer réseau avant fermeture.
+        RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.06))
+    }
+
+    private func waitForEscPosPeerSignal(from output: OutputStream, timeoutMs: Int) throws {
+        escPosStreamsLock.lock()
+        let input = escPosInputStreams[ObjectIdentifier(output)]
+        escPosStreamsLock.unlock()
+
+        guard let input else { return }
+
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutMs) / 1000)
+
+        while Date() < deadline {
+            if input.hasBytesAvailable {
+                let readCount = input.read(&buffer, maxLength: buffer.count)
+                if readCount >= 0 {
+                    return
+                }
+                if let readError = input.streamError {
+                    if isEscPosPeerResetError(readError) {
+                        return
+                    }
+                    throw readError
+                }
+            }
+
+            if let streamError = input.streamError {
+                if isEscPosPeerResetError(streamError) {
+                    return
+                }
+                throw streamError
+            }
+
+            switch input.streamStatus {
+            case .atEnd:
+                return
+            case .error:
+                if let streamError = input.streamError {
+                    if isEscPosPeerResetError(streamError) {
+                        return
+                    }
+                    throw streamError
+                }
+                return
+            default:
+                break
+            }
+
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+
+        throw NSError(
+            domain: "PrinterBridge",
+            code: 5,
+            userInfo: [NSLocalizedDescriptionKey: "Aucune confirmation TCP de l'imprimante (delai depasse)."]
+        )
+    }
+
+    private func isEscPosPeerResetError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain && nsError.code == Int(ECONNRESET) {
+            return true
+        }
+        let lowerMessage = nsError.localizedDescription.lowercased()
+        return lowerMessage.contains("connection reset") || lowerMessage.contains("reset by peer")
     }
 
     private func buildEscPosPayload(lines: [String], cut: Bool, encodingName: String) -> Data {
         var payload = Data([0x1B, 0x40]) // ESC @ init
         for line in lines {
             payload.append(encodeEscPosText(line, encodingName: encodingName))
-            payload.append(0x0A) // LF
+            payload.append(contentsOf: [0x0D, 0x0A]) // CRLF (plus compatible selon les modèles)
         }
         if cut {
             payload.append(contentsOf: [0x1D, 0x56, 0x41, 0x00]) // GS V A 0
