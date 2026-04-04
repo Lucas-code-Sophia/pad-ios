@@ -135,11 +135,11 @@ type DispatchPrintSummary = {
   failedStations: Array<{ station: DispatchStation; message: string }>
 }
 
-const STANDARD_ALCOOL_BASE_ITEMS: Array<{ name: string; basePrice: number }> = [
-  { name: "Whisky", basePrice: 10 },
-  { name: "Rhum", basePrice: 10 },
-  { name: "Tequila", basePrice: 10 },
-  { name: "Vodka", basePrice: 10 },
+const STANDARD_ALCOOL_BASE_ITEMS: Array<{ type: SpiritSelectionType; name: string; basePrice: number }> = [
+  { type: "whisky", name: "Whisky", basePrice: 10 },
+  { type: "rhum", name: "Rhum", basePrice: 10 },
+  { type: "tequila", name: "Tequila", basePrice: 10 },
+  { type: "vodka", name: "Vodka", basePrice: 10 },
 ]
 
 export default function OrderPage() {
@@ -331,23 +331,24 @@ export default function OrderPage() {
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isRhumArrangeItem = (name: string) => normalizeForSearch(name) === "rhum arrange"
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
+  const matchesSpiritBaseName = (name: string, type: SpiritSelectionType) => {
+    const normalizedName = normalizeForSearch(name)
+    if (type === "whisky") return /^whisk(?:y|ies)\b/.test(normalizedName) || normalizedName.includes("whisky")
+    if (type === "rhum") return /^rhums?\b/.test(normalizedName) || (normalizedName.includes("rhum") && !normalizedName.includes("arrange"))
+    if (type === "tequila") return /^tequilas?\b/.test(normalizedName) || normalizedName.includes("tequila")
+    if (type === "vodka") return /^vodkas?\b/.test(normalizedName) || normalizedName.includes("vodka")
+    return false
+  }
   const getSpiritSelectionConfig = (item: MenuItem): SpiritDialogConfig | null => {
     if (isGinTonicItem(item.name)) {
       return spiritSelectionConfigs.gin_tonic
     }
 
     const normalizedName = normalizeForSearch(item.name)
-    if (/^whisk(?:y|ies)\b/.test(normalizedName)) return spiritSelectionConfigs.whisky
-    if (/^rhums?\b/.test(normalizedName) && !normalizedName.includes("arrange")) {
-      return spiritSelectionConfigs.rhum
-    }
-    if (/^tequilas?\b/.test(normalizedName)) return spiritSelectionConfigs.tequila
-    if (/^vodkas?\b/.test(normalizedName)) return spiritSelectionConfigs.vodka
-
-    if (normalizedName.includes("whisky")) return spiritSelectionConfigs.whisky
-    if (normalizedName.includes("rhum") && !normalizedName.includes("arrange")) return spiritSelectionConfigs.rhum
-    if (normalizedName.includes("tequila")) return spiritSelectionConfigs.tequila
-    if (normalizedName.includes("vodka")) return spiritSelectionConfigs.vodka
+    if (matchesSpiritBaseName(normalizedName, "whisky")) return spiritSelectionConfigs.whisky
+    if (matchesSpiritBaseName(normalizedName, "rhum")) return spiritSelectionConfigs.rhum
+    if (matchesSpiritBaseName(normalizedName, "tequila")) return spiritSelectionConfigs.tequila
+    if (matchesSpiritBaseName(normalizedName, "vodka")) return spiritSelectionConfigs.vodka
     return null
   }
   const parseChoiceOptions = (value?: string | null) =>
@@ -704,20 +705,10 @@ export default function OrderPage() {
     if (!alcoolsCategory) return itemsData
 
     const itemsInAlcools = itemsData.filter((item) => item.category_id === alcoolsCategory.id)
-    const hasVisibleBase = (baseName: string) => {
-      const normalizedBase = normalizeForSearch(baseName)
-      const matcher =
-        normalizedBase === "rhum"
-          ? /^rhums?\b/
-          : normalizedBase === "tequila"
-            ? /^tequilas?\b/
-            : normalizedBase === "vodka"
-              ? /^vodkas?\b/
-              : /^whisk(?:y|ies)\b/
-      return itemsInAlcools.some((item) => item.status !== false && matcher.test(normalizeForSearch(item.name || "")))
-    }
+    const hasVisibleBase = (type: SpiritSelectionType) =>
+      itemsInAlcools.some((item) => item.status !== false && matchesSpiritBaseName(item.name || "", type))
 
-    const missingItems = STANDARD_ALCOOL_BASE_ITEMS.filter((item) => !hasVisibleBase(item.name))
+    const missingItems = STANDARD_ALCOOL_BASE_ITEMS.filter((item) => !hasVisibleBase(item.type))
     if (missingItems.length === 0) return itemsData
 
     await Promise.all(
@@ -1142,6 +1133,57 @@ export default function OrderPage() {
       },
     ])
     closeSpiritDialog()
+  }
+
+  const ensureSpiritBaseItemAndOpenDialog = async (type: Exclude<SpiritSelectionType, "gin_tonic">) => {
+    const config = spiritSelectionConfigs[type]
+    if (!config) return
+
+    const alcoolsCategory = categories.find((category) =>
+      normalizeForSearch(category.name || "").includes("alcool"),
+    )
+    if (!alcoolsCategory) {
+      alert("Catégorie Alcools introuvable.")
+      return
+    }
+
+    const existingItem = menuItems.find(
+      (item) =>
+        item.category_id === alcoolsCategory.id &&
+        item.status !== false &&
+        matchesSpiritBaseName(item.name || "", type),
+    )
+    if (existingItem) {
+      openSpiritDialog(existingItem, config)
+      return
+    }
+
+    const baseItem = STANDARD_ALCOOL_BASE_ITEMS.find((item) => item.type === type)
+    if (!baseItem) return
+
+    try {
+      const response = await fetch("/api/menu/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: baseItem.name,
+          price: baseItem.basePrice,
+          tax_rate: 20,
+          category: alcoolsCategory.name,
+          routing: "bar",
+          status: true,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error("creation_failed")
+      }
+      const createdItem: MenuItem = await response.json()
+      setMenuItems((prev) => [...prev, createdItem])
+      openSpiritDialog(createdItem, config)
+    } catch (error) {
+      console.error("[v0] Error creating spirit base item:", type, error)
+      alert("Impossible de créer l'article dans Alcools.")
+    }
   }
 
   // ── Couverts ──────────────────────────────────────────────────────────
@@ -2063,6 +2105,13 @@ export default function OrderPage() {
         if (a.price !== b.price) return a.price - b.price
         return a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
       })
+  const isAlcoolsCategorySelected = selectedCategoryNameNormalized.includes("alcool")
+  const missingSpiritBaseItems = isAlcoolsCategorySelected && !hasSearchQuery
+    ? STANDARD_ALCOOL_BASE_ITEMS.filter(
+        (baseItem) =>
+          !displayedItems.some((menuItem) => matchesSpiritBaseName(menuItem.name || "", baseItem.type)),
+      )
+    : []
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
@@ -2339,6 +2388,22 @@ export default function OrderPage() {
                       <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 mb-1">Divers</div>
                       <div className="font-semibold text-sm sm:text-base text-white mb-1">{preset.label}</div>
                       <div className="text-xs sm:text-sm text-indigo-200">TVA {preset.taxRate}%</div>
+                    </div>
+                  </Card>
+                ))}
+
+                {missingSpiritBaseItems.map((baseItem) => (
+                  <Card
+                    key={`spirit-missing-${baseItem.type}`}
+                    className="p-3 sm:p-4 bg-cyan-900/20 border-2 border-cyan-700/70 hover:bg-cyan-900/35 cursor-pointer transition-colors"
+                    onClick={() => {
+                      void ensureSpiritBaseItemAndOpenDialog(baseItem.type)
+                    }}
+                  >
+                    <div className="text-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-300 mb-1">Alcools</div>
+                      <div className="font-semibold text-sm sm:text-base text-white mb-1">{baseItem.name}</div>
+                      <div className="text-xs sm:text-sm text-cyan-200">à partir de {baseItem.basePrice.toFixed(2)} €</div>
                     </div>
                   </Card>
                 ))}
