@@ -10,8 +10,8 @@ const normalizeForSearch = (value: string) =>
     .toLowerCase()
     .trim()
 
-const GIN_NOTE_REGEX = /^gin\s*:\s*(.+)$/i
-const GIN_SURCHARGE_SUFFIX_REGEX = /\s*\(\+\s*[\d.,]+\s*€\s*\)\s*$/i
+const SPIRIT_NOTE_REGEX = /^(gin|whisky|rhum|tequila|vodka)\s*:\s*(.+)$/i
+const PRICE_SUFFIX_REGEX = /\s*\((?:\+\s*)?[\d.,]+\s*€\s*\)\s*$/i
 
 const parseNoteLines = (note?: string | null) =>
   String(note || "")
@@ -19,31 +19,42 @@ const parseNoteLines = (note?: string | null) =>
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
 
-const buildDisplayName = (baseName: string, ginVariant?: string) => {
-  if (!ginVariant) return baseName
-  if (!normalizeForSearch(baseName).includes("gin tonic")) return baseName
-  const cleanGinVariant = ginVariant.replace(GIN_SURCHARGE_SUFFIX_REGEX, "").trim()
-  if (!cleanGinVariant) return baseName
-  return `${baseName} - ${cleanGinVariant}`
+const shouldDisplaySpiritVariant = (baseName: string) => {
+  const normalizedBaseName = normalizeForSearch(baseName)
+  if (normalizedBaseName.includes("gin tonic")) return true
+  if (normalizedBaseName.includes("whisky")) return true
+  if (normalizedBaseName.includes("tequila")) return true
+  if (normalizedBaseName.includes("vodka")) return true
+  if (normalizedBaseName === "rhum") return true
+  if (normalizedBaseName.startsWith("rhum ") && !normalizedBaseName.includes("arrange")) return true
+  return false
+}
+
+const buildDisplayName = (baseName: string, spiritVariant?: string) => {
+  if (!spiritVariant) return baseName
+  if (!shouldDisplaySpiritVariant(baseName)) return baseName
+  const cleanVariant = spiritVariant.replace(PRICE_SUFFIX_REGEX, "").trim()
+  if (!cleanVariant) return baseName
+  return `${baseName} - ${cleanVariant}`
 }
 
 export const getItemDisplayInfo = (baseName: string, note?: string | null): ItemDisplayInfo => {
   const safeBaseName = String(baseName || "").trim() || "Article"
   const noteLines = parseNoteLines(note)
 
-  let ginVariant: string | undefined
+  let spiritVariant: string | undefined
   const remainingNoteLines: string[] = []
 
   for (const line of noteLines) {
-    const match = line.match(GIN_NOTE_REGEX)
-    if (match && !ginVariant) {
-      ginVariant = match[1]?.trim()
+    const match = line.match(SPIRIT_NOTE_REGEX)
+    if (match && !spiritVariant) {
+      spiritVariant = match[2]?.trim()
       continue
     }
     remainingNoteLines.push(line)
   }
 
-  const displayName = buildDisplayName(safeBaseName, ginVariant)
+  const displayName = buildDisplayName(safeBaseName, spiritVariant)
   const displayNote = remainingNoteLines.join("\n").trim() || undefined
 
   return { displayName, displayNote }

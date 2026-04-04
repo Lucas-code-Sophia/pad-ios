@@ -116,6 +116,20 @@ interface SendFeedback {
 
 type DispatchStation = "kitchen" | "bar"
 
+type SpiritSelectionType = "gin_tonic" | "whisky" | "rhum" | "tequila" | "vodka"
+
+type SpiritOption = {
+  name: string
+  price: number
+}
+
+type SpiritDialogConfig = {
+  type: SpiritSelectionType
+  title: string
+  notePrefix: "Gin" | "Whisky" | "Rhum" | "Tequila" | "Vodka"
+  options: SpiritOption[]
+}
+
 type DispatchPrintSummary = {
   printedStations: DispatchStation[]
   failedStations: Array<{ station: DispatchStation; message: string }>
@@ -153,8 +167,9 @@ export default function OrderPage() {
   const [rhumArrangeDialogOpen, setRhumArrangeDialogOpen] = useState(false)
   const [rhumArrangeItem, setRhumArrangeItem] = useState<MenuItem | null>(null)
   const [rhumArrangeOptions, setRhumArrangeOptions] = useState<string[]>([])
-  const [ginTonicDialogOpen, setGinTonicDialogOpen] = useState(false)
-  const [ginTonicItem, setGinTonicItem] = useState<MenuItem | null>(null)
+  const [spiritDialogOpen, setSpiritDialogOpen] = useState(false)
+  const [spiritDialogItem, setSpiritDialogItem] = useState<MenuItem | null>(null)
+  const [spiritDialogConfig, setSpiritDialogConfig] = useState<SpiritDialogConfig | null>(null)
   const [supplementDialog, setSupplementDialog] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [transferTables, setTransferTables] = useState<Table[]>([])
@@ -229,15 +244,79 @@ export default function OrderPage() {
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
   const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
   const defaultRhumArrangeOptions = ["Ananas", "Vanille", "Mangue", "Passion", "Coco", "Gingembre"]
-  const ginTonicOptions: Array<{ name: string; surcharge: number }> = [
-    { name: "Gibsons", surcharge: 0 },
-    { name: "Plymouth", surcharge: 2 },
-    { name: "Malfy", surcharge: 2 },
-    { name: "G'Vine", surcharge: 2 },
-    { name: "L'Acrobate", surcharge: 2 },
-    { name: "Hendrick's", surcharge: 2 },
-    { name: "Monkey 47", surcharge: 3 },
-  ]
+  const spiritSelectionConfigs: Record<SpiritSelectionType, SpiritDialogConfig> = {
+    gin_tonic: {
+      type: "gin_tonic",
+      title: "🍸 Choix du gin",
+      notePrefix: "Gin",
+      options: [
+        { name: "Gibson", price: 11 },
+        { name: "Malfy Lemon", price: 18 },
+        { name: "Malfy", price: 18 },
+        { name: "L'Acrobate", price: 15 },
+        { name: "Mare", price: 18 },
+        { name: "Monkey 47", price: 19 },
+        { name: "Hendrick's", price: 14 },
+        { name: "Bombay Sapphire", price: 12 },
+        { name: "Plymouth", price: 15 },
+        { name: "Méditerranéen gin", price: 17 },
+      ],
+    },
+    whisky: {
+      type: "whisky",
+      title: "🥃 Choix du whisky (4cl)",
+      notePrefix: "Whisky",
+      options: [
+        { name: "Ballantines", price: 10 },
+        { name: "Jack Daniel", price: 14 },
+        { name: "Bushmills", price: 13 },
+        { name: "Nikka", price: 18 },
+        { name: "Chivas Régal 18 ans", price: 20 },
+        { name: "Aberlour 10 ans", price: 16 },
+      ],
+    },
+    rhum: {
+      type: "rhum",
+      title: "🥃 Choix du rhum (4cl)",
+      notePrefix: "Rhum",
+      options: [
+        { name: "Havana 3 ans", price: 10 },
+        { name: "Havana 7", price: 14 },
+        { name: "La Hechicera", price: 18 },
+        { name: "Diplomatico", price: 16 },
+        { name: "Bumbu", price: 15 },
+        { name: "Bumbu XO", price: 18 },
+        { name: "Botran 15 ans", price: 17 },
+        { name: "Plantation XO", price: 17 },
+        { name: "3 Rivières", price: 14 },
+      ],
+    },
+    tequila: {
+      type: "tequila",
+      title: "🌵 Choix de la tequila (4cl)",
+      notePrefix: "Tequila",
+      options: [
+        { name: "Diego y Maria", price: 10 },
+        { name: "Don Julio Blanco", price: 17 },
+        { name: "Don Julio Reposado", price: 18 },
+        { name: "Olmeca", price: 15 },
+        { name: "Altos Reposado", price: 15 },
+        { name: "Erena", price: 16 },
+        { name: "Azul", price: 45 },
+      ],
+    },
+    vodka: {
+      type: "vodka",
+      title: "🍸 Choix de la vodka (4cl)",
+      notePrefix: "Vodka",
+      options: [
+        { name: "Smirnof", price: 10 },
+        { name: "Vodka Pyla", price: 14 },
+        { name: "Vodka Cap Ferret", price: 14 },
+        { name: "Belve / Grey Goose", price: 18 },
+      ],
+    },
+  }
   const requiresCuissonSelection = (name: string) => {
     const normalizedName = normalizeForSearch(name)
     return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
@@ -245,6 +324,23 @@ export default function OrderPage() {
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isRhumArrangeItem = (name: string) => normalizeForSearch(name) === "rhum arrange"
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
+  const getSpiritSelectionConfig = (item: MenuItem): SpiritDialogConfig | null => {
+    if (isGinTonicItem(item.name)) {
+      return spiritSelectionConfigs.gin_tonic
+    }
+
+    const normalizedCategory = normalizeForSearch(item.category || "")
+    if (!normalizedCategory.includes("alcool")) return null
+
+    const normalizedName = normalizeForSearch(item.name)
+    if (normalizedName === "whisky" || normalizedName.startsWith("whisky ")) return spiritSelectionConfigs.whisky
+    if (normalizedName === "rhum" || (normalizedName.startsWith("rhum ") && !normalizedName.includes("arrange"))) {
+      return spiritSelectionConfigs.rhum
+    }
+    if (normalizedName === "tequila" || normalizedName.startsWith("tequila ")) return spiritSelectionConfigs.tequila
+    if (normalizedName === "vodka" || normalizedName.startsWith("vodka ")) return spiritSelectionConfigs.vodka
+    return null
+  }
   const parseChoiceOptions = (value?: string | null) =>
     String(value || "")
       .split(/[,;\n]+/)
@@ -966,23 +1062,28 @@ export default function OrderPage() {
     setRhumArrangeOptions([])
   }
 
-  const openGinTonicDialog = (item: MenuItem) => {
-    setGinTonicItem(item)
-    setGinTonicDialogOpen(true)
+  const openSpiritDialog = (item: MenuItem, config: SpiritDialogConfig) => {
+    setSpiritDialogItem(item)
+    setSpiritDialogConfig(config)
+    setSpiritDialogOpen(true)
   }
 
-  const handleGinTonicSelect = async (choice: { name: string; surcharge: number }) => {
-    if (!ginTonicItem) return
-    const note = choice.surcharge > 0 ? `Gin: ${choice.name} (+${choice.surcharge}€)` : `Gin: ${choice.name}`
+  const closeSpiritDialog = () => {
+    setSpiritDialogOpen(false)
+    setSpiritDialogItem(null)
+    setSpiritDialogConfig(null)
+  }
+
+  const handleSpiritSelect = async (choice: SpiritOption) => {
+    if (!spiritDialogItem || !spiritDialogConfig) return
     await addItemsToOrder([
       {
-        menuItem: ginTonicItem,
-        notes: note,
-        priceOverride: ginTonicItem.price + choice.surcharge,
+        menuItem: spiritDialogItem,
+        notes: `${spiritDialogConfig.notePrefix}: ${choice.name}`,
+        priceOverride: choice.price,
       },
     ])
-    setGinTonicDialogOpen(false)
-    setGinTonicItem(null)
+    closeSpiritDialog()
   }
 
   // ── Couverts ──────────────────────────────────────────────────────────
@@ -1067,8 +1168,9 @@ export default function OrderPage() {
       openRhumArrangeDialog(item)
       return
     }
-    if (isGinTonicItem(item.name)) {
-      openGinTonicDialog(item)
+    const spiritConfig = getSpiritSelectionConfig(item)
+    if (spiritConfig) {
+      openSpiritDialog(item, spiritConfig)
       return
     }
     if (isVinBouteilleItem(item) && !hasOrderedWineBottle) {
@@ -2812,39 +2914,37 @@ export default function OrderPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Gin Tonic Dialog */}
+      {/* Spirit Selection Dialog */}
       <Dialog
-        open={ginTonicDialogOpen}
+        open={spiritDialogOpen}
         onOpenChange={(open) => {
-          setGinTonicDialogOpen(open)
-          if (!open) {
-            setGinTonicItem(null)
+          if (open) {
+            setSpiritDialogOpen(true)
+            return
           }
+          closeSpiritDialog()
         }}
       >
         <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>🍸 Choix du gin — {ginTonicItem?.name}</DialogTitle>
+            <DialogTitle>{spiritDialogConfig?.title || "Choix de la marque"} — {spiritDialogItem?.name}</DialogTitle>
           </DialogHeader>
           <div className="grid grid-cols-1 gap-3 py-3">
-            {ginTonicOptions.map((option) => (
+            {(spiritDialogConfig?.options || []).map((option) => (
               <Button
                 key={option.name}
-                onClick={() => handleGinTonicSelect(option)}
+                onClick={() => handleSpiritSelect(option)}
                 className="h-12 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-sky-600 hover:border-sky-500 transition-colors justify-between px-4"
               >
                 <span>{option.name}</span>
-                <span className="text-sm text-slate-200">{option.surcharge > 0 ? `+${option.surcharge}€` : "+0€"}</span>
+                <span className="text-sm text-slate-200">{option.price.toFixed(2)}€</span>
               </Button>
             ))}
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => {
-                setGinTonicDialogOpen(false)
-                setGinTonicItem(null)
-              }}
+              onClick={closeSpiritDialog}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
               Annuler
