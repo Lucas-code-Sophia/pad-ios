@@ -135,6 +135,13 @@ type DispatchPrintSummary = {
   failedStations: Array<{ station: DispatchStation; message: string }>
 }
 
+const STANDARD_ALCOOL_BASE_ITEMS: Array<{ name: string; basePrice: number }> = [
+  { name: "Whisky", basePrice: 10 },
+  { name: "Rhum", basePrice: 10 },
+  { name: "Tequila", basePrice: 10 },
+  { name: "Vodka", basePrice: 10 },
+]
+
 export default function OrderPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
@@ -329,16 +336,18 @@ export default function OrderPage() {
       return spiritSelectionConfigs.gin_tonic
     }
 
-    const normalizedCategory = normalizeForSearch(item.category || "")
-    if (!normalizedCategory.includes("alcool")) return null
-
     const normalizedName = normalizeForSearch(item.name)
-    if (normalizedName === "whisky" || normalizedName.startsWith("whisky ")) return spiritSelectionConfigs.whisky
-    if (normalizedName === "rhum" || (normalizedName.startsWith("rhum ") && !normalizedName.includes("arrange"))) {
+    if (/^whisk(?:y|ies)\b/.test(normalizedName)) return spiritSelectionConfigs.whisky
+    if (/^rhums?\b/.test(normalizedName) && !normalizedName.includes("arrange")) {
       return spiritSelectionConfigs.rhum
     }
-    if (normalizedName === "tequila" || normalizedName.startsWith("tequila ")) return spiritSelectionConfigs.tequila
-    if (normalizedName === "vodka" || normalizedName.startsWith("vodka ")) return spiritSelectionConfigs.vodka
+    if (/^tequilas?\b/.test(normalizedName)) return spiritSelectionConfigs.tequila
+    if (/^vodkas?\b/.test(normalizedName)) return spiritSelectionConfigs.vodka
+
+    if (normalizedName.includes("whisky")) return spiritSelectionConfigs.whisky
+    if (normalizedName.includes("rhum") && !normalizedName.includes("arrange")) return spiritSelectionConfigs.rhum
+    if (normalizedName.includes("tequila")) return spiritSelectionConfigs.tequila
+    if (normalizedName.includes("vodka")) return spiritSelectionConfigs.vodka
     return null
   }
   const parseChoiceOptions = (value?: string | null) =>
@@ -688,6 +697,54 @@ export default function OrderPage() {
     return []
   }
 
+  const ensureAlcoolBaseButtons = async (categoriesData: MenuCategory[], itemsData: MenuItem[]) => {
+    const alcoolsCategory = categoriesData.find((category) =>
+      normalizeForSearch(category.name || "").includes("alcool"),
+    )
+    if (!alcoolsCategory) return itemsData
+
+    const itemsInAlcools = itemsData.filter((item) => item.category_id === alcoolsCategory.id)
+    const hasVisibleBase = (baseName: string) => {
+      const normalizedBase = normalizeForSearch(baseName)
+      const matcher =
+        normalizedBase === "rhum"
+          ? /^rhums?\b/
+          : normalizedBase === "tequila"
+            ? /^tequilas?\b/
+            : normalizedBase === "vodka"
+              ? /^vodkas?\b/
+              : /^whisk(?:y|ies)\b/
+      return itemsInAlcools.some((item) => item.status !== false && matcher.test(normalizeForSearch(item.name || "")))
+    }
+
+    const missingItems = STANDARD_ALCOOL_BASE_ITEMS.filter((item) => !hasVisibleBase(item.name))
+    if (missingItems.length === 0) return itemsData
+
+    await Promise.all(
+      missingItems.map(async (item) => {
+        try {
+          await fetch("/api/menu/items", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: item.name,
+              price: item.basePrice,
+              tax_rate: 20,
+              category: alcoolsCategory.name,
+              routing: "bar",
+              status: true,
+            }),
+          })
+        } catch (error) {
+          console.error("[v0] Error ensuring alcool base item:", item.name, error)
+        }
+      }),
+    )
+
+    const refreshedItems = await fetchMenuItems()
+    return refreshedItems.length > 0 ? refreshedItems : itemsData
+  }
+
   const fetchAllergenMap = async () => {
     try {
       const res = await fetch("/api/menu/allergen-map")
@@ -702,8 +759,9 @@ export default function OrderPage() {
 
   const fetchBaseData = async () => {
     try {
-      const [, itemsData] = await Promise.all([fetchCategories(), fetchMenuItems(), fetchAllergenMap()])
-      return itemsData
+      const [categoriesData, itemsData] = await Promise.all([fetchCategories(), fetchMenuItems(), fetchAllergenMap()])
+      const finalItems = await ensureAlcoolBaseButtons(categoriesData, itemsData)
+      return finalItems
     } catch (error) {
       console.error("[v0] Error fetching base data:", error)
       return []
@@ -2291,6 +2349,8 @@ export default function OrderPage() {
               const isOutOfStock = item.out_of_stock
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
               const itemDetails = isRhumArrangeItem(item.name) ? "" : item.details?.trim()
+              const spiritConfig = getSpiritSelectionConfig(item)
+              const itemCardPrice = spiritConfig ? Math.min(...spiritConfig.options.map((option) => option.price)) : item.price
 
               return (
                 <Card
@@ -2320,7 +2380,7 @@ export default function OrderPage() {
                       </div>
                     )}
                     <div className="text-xs sm:text-sm mb-2 text-slate-400">
-                      {item.price.toFixed(2)} €
+                      {itemCardPrice.toFixed(2)} €
                     </div>
                     {isOutOfStock ? (
                       <div className="flex items-center justify-center gap-1 text-red-400">

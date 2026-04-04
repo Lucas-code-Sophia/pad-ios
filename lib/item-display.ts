@@ -25,8 +25,7 @@ const shouldDisplaySpiritVariant = (baseName: string) => {
   if (normalizedBaseName.includes("whisky")) return true
   if (normalizedBaseName.includes("tequila")) return true
   if (normalizedBaseName.includes("vodka")) return true
-  if (normalizedBaseName === "rhum") return true
-  if (normalizedBaseName.startsWith("rhum ") && !normalizedBaseName.includes("arrange")) return true
+  if (/^rhums?\b/.test(normalizedBaseName) && !normalizedBaseName.includes("arrange")) return true
   return false
 }
 
