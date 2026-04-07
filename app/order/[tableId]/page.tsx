@@ -329,12 +329,15 @@ export default function OrderPage() {
     return normalizedName.includes("burger") || normalizedName.includes("bavette a la plancha")
   }
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
-  const isRhumArrangeItem = (name: string) => normalizeForSearch(name) === "rhum arrange"
+  const isRhumArrangeItem = (name: string) => normalizeForSearch(name).startsWith("rhum arrange")
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
   const matchesSpiritBaseName = (name: string, type: SpiritSelectionType) => {
     const normalizedName = normalizeForSearch(name)
     if (type === "whisky") return /^whisk(?:y|ies)\b/.test(normalizedName) || normalizedName.includes("whisky")
-    if (type === "rhum") return /^rhums?\b/.test(normalizedName) || (normalizedName.includes("rhum") && !normalizedName.includes("arrange"))
+    if (type === "rhum") {
+      if (normalizedName.includes("arrange")) return false
+      return /^rhums?\b/.test(normalizedName) || normalizedName.includes("rhum")
+    }
     if (type === "tequila") return /^tequilas?\b/.test(normalizedName) || normalizedName.includes("tequila")
     if (type === "vodka") return /^vodkas?\b/.test(normalizedName) || normalizedName.includes("vodka")
     return false
@@ -2112,6 +2115,7 @@ export default function OrderPage() {
           !displayedItems.some((menuItem) => matchesSpiritBaseName(menuItem.name || "", baseItem.type)),
       )
     : []
+  const quickRhumButtonEnabled = isAlcoolsCategorySelected && !hasSearchQuery
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
@@ -2391,6 +2395,22 @@ export default function OrderPage() {
                     </div>
                   </Card>
                 ))}
+
+                {quickRhumButtonEnabled && (
+                  <Card
+                    key="quick-rhum-button"
+                    className="p-3 sm:p-4 bg-amber-900/20 border-2 border-amber-700/70 hover:bg-amber-900/35 cursor-pointer transition-colors"
+                    onClick={() => {
+                      void ensureSpiritBaseItemAndOpenDialog("rhum")
+                    }}
+                  >
+                    <div className="text-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300 mb-1">Alcools</div>
+                      <div className="font-semibold text-sm sm:text-base text-white mb-1">Rhum</div>
+                      <div className="text-xs sm:text-sm text-amber-200">Choisir la marque (4cl)</div>
+                    </div>
+                  </Card>
+                )}
 
                 {missingSpiritBaseItems.map((baseItem) => (
                   <Card
