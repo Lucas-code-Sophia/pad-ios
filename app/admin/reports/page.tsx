@@ -994,7 +994,7 @@ export default function ReportsPage() {
                     {summaryData.services.midi ? (
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span className="text-slate-400 text-sm">CA</span>
+                          <span className="text-slate-400 text-sm">CA TTC</span>
                           <span className="text-white font-bold">{summaryData.services.midi.sales.toFixed(2)} €</span>
                         </div>
                         <div className="flex justify-between">
@@ -1052,7 +1052,7 @@ export default function ReportsPage() {
                     {summaryData.services.soir ? (
                       <div className="space-y-2">
                         <div className="flex justify-between">
-                          <span className="text-slate-400 text-sm">CA</span>
+                          <span className="text-slate-400 text-sm">CA TTC</span>
                           <span className="text-white font-bold">{summaryData.services.soir.sales.toFixed(2)} €</span>
                         </div>
                         <div className="flex justify-between">
@@ -1187,7 +1187,13 @@ export default function ReportsPage() {
                               <div className="flex items-center gap-2">
                                 <span className="text-white font-medium">{order.amount.toFixed(2)} €</span>
                                 <Badge variant="outline" className="text-[10px] px-1.5 border-slate-600 text-slate-400">
-                                  {order.payment_method === "card" ? "💳" : order.payment_method === "cash" ? "💵" : "💰"}
+                                  {order.payment_method === "card"
+                                    ? "💳"
+                                    : order.payment_method === "cash"
+                                      ? "💵"
+                                      : order.payment_method === "mixed"
+                                        ? "💳💵"
+                                        : "💰"}
                                 </Badge>
                               </div>
                             </div>

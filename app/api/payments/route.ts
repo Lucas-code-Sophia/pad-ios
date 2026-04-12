@@ -174,7 +174,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Get total payments for this order
-    const { data: payments } = await supabase.from("payments").select("amount").eq("order_id", orderId)
+    const { data: payments } = await supabase
+      .from("payments")
+      .select("amount, payment_method")
+      .eq("order_id", orderId)
 
     // Get order total and complimentary items
     const { data: orderItems } = await supabase.from("order_items").select("price, quantity, is_complimentary").eq("order_id", orderId)
@@ -202,6 +205,26 @@ export async function POST(request: NextRequest) {
 
     const isFullyPaid = remainingAmount <= 0.01 // Allow for small rounding errors
 
+    // Classify the final payment mode for the sale record.
+    // If multiple methods were used, keep an explicit "mixed" flag.
+    const normalizedPaymentMethods = Array.from(
+      new Set(
+        (payments || [])
+          .filter((payment) => Number(payment.amount || 0) > 0.009)
+          .map((payment) => {
+            const method = String(payment.payment_method || "").toLowerCase()
+            if (method === "cash" || method === "card") return method
+            return "other"
+          }),
+      ),
+    )
+    const salePaymentMethod =
+      normalizedPaymentMethods.length === 1
+        ? normalizedPaymentMethods[0]
+        : normalizedPaymentMethods.length > 1
+          ? "mixed"
+          : paymentMethod
+
     if (isFullyPaid) {
       await supabase.from("orders").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", orderId)
       
@@ -228,7 +251,7 @@ export async function POST(request: NextRequest) {
         total_amount: orderTotal,
         complimentary_amount: totalComplimentaryAmount,
         complimentary_count: totalComplimentaryCount,
-        payment_method: paymentMethod,
+        payment_method: salePaymentMethod,
       })
     }
 

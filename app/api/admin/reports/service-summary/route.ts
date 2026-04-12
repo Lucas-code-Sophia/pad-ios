@@ -2,9 +2,18 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
 
-type PaymentMethod = "cash" | "card" | "other"
+type PaymentBucketMethod = "cash" | "card" | "other"
+type OrderPaymentMethod = PaymentBucketMethod | "mixed"
+type PaymentBucket = {
+  cash: number
+  card: number
+  other: number
+  cash_count: number
+  card_count: number
+  other_count: number
+}
 
-const normalizePaymentMethod = (value: unknown): PaymentMethod => {
+const normalizePaymentMethod = (value: unknown): PaymentBucketMethod => {
   if (value === "cash") return "cash"
   if (value === "card") return "card"
   return "other"
@@ -80,6 +89,52 @@ export async function GET(request: NextRequest) {
 
     // ── Fetch order_items for all orders ──
     const orderIds = orders.map((o) => o.id)
+
+    // ── Fetch payments to resolve reliable payment mode per order ──
+    const { data: paymentsData } = await supabase
+      .from("payments")
+      .select("order_id, payment_method, amount")
+      .in("order_id", orderIds)
+
+    const paymentBucketsByOrder = new Map<string, PaymentBucket>()
+    for (const payment of paymentsData || []) {
+      const orderId = String(payment.order_id || "")
+      if (!orderId) continue
+      const amount = Number(payment.amount || 0)
+      if (amount <= 0) continue
+      const bucket = paymentBucketsByOrder.get(orderId) || {
+        cash: 0,
+        card: 0,
+        other: 0,
+        cash_count: 0,
+        card_count: 0,
+        other_count: 0,
+      }
+      const method = normalizePaymentMethod(String(payment.payment_method || "").toLowerCase())
+      if (method === "cash") {
+        bucket.cash += amount
+        bucket.cash_count += 1
+      } else if (method === "card") {
+        bucket.card += amount
+        bucket.card_count += 1
+      } else {
+        bucket.other += amount
+        bucket.other_count += 1
+      }
+      paymentBucketsByOrder.set(orderId, bucket)
+    }
+
+    const paymentMethodByOrder = new Map<string, OrderPaymentMethod>()
+    for (const [orderId, bucket] of paymentBucketsByOrder.entries()) {
+      const usedMethods = [
+        bucket.cash > 0.009 ? "cash" : null,
+        bucket.card > 0.009 ? "card" : null,
+        bucket.other > 0.009 ? "other" : null,
+      ].filter(Boolean) as string[]
+      if (usedMethods.length === 1) paymentMethodByOrder.set(orderId, usedMethods[0])
+      else if (usedMethods.length > 1) paymentMethodByOrder.set(orderId, "mixed")
+    }
+
     const { data: allOrderItems } = await supabase
       .from("order_items")
       .select("order_id, menu_item_id, quantity, price, is_complimentary, notes")
@@ -134,7 +189,11 @@ export async function GET(request: NextRequest) {
       const tableNumber = tableNumberMap.get(order.table_id) || "?"
       const sale = saleByOrder.get(order.id)
       const amount = sale ? Number.parseFloat(sale.total_amount) : 0
-      const paymentMethod = normalizePaymentMethod(sale?.payment_method)
+      const paymentBucket = paymentBucketsByOrder.get(order.id)
+      const salePaymentMethod = String(sale?.payment_method || "").toLowerCase()
+      const paymentMethod: OrderPaymentMethod =
+        paymentMethodByOrder.get(order.id) ||
+        (salePaymentMethod === "mixed" ? "mixed" : normalizePaymentMethod(salePaymentMethod))
       const compAmount = sale ? Number.parseFloat(sale.complimentary_amount || 0) : 0
       const compCount = sale ? parseInt(sale.complimentary_count || 0) : 0
 
@@ -154,7 +213,14 @@ export async function GET(request: NextRequest) {
         midiOrders++
         if (order.covers) midiCovers += order.covers
         if (durationMin != null) midiDurations.push(durationMin)
-        if (paymentMethod === "cash") {
+        if (paymentBucket) {
+          midiCashAmount += paymentBucket.cash
+          midiCardAmount += paymentBucket.card
+          midiOtherAmount += paymentBucket.other
+          midiCashOrders += paymentBucket.cash_count
+          midiCardOrders += paymentBucket.card_count
+          midiOtherOrders += paymentBucket.other_count
+        } else if (paymentMethod === "cash") {
           midiCashAmount += amount
           midiCashOrders++
         } else if (paymentMethod === "card") {
@@ -169,7 +235,14 @@ export async function GET(request: NextRequest) {
         soirOrders++
         if (order.covers) soirCovers += order.covers
         if (durationMin != null) soirDurations.push(durationMin)
-        if (paymentMethod === "cash") {
+        if (paymentBucket) {
+          soirCashAmount += paymentBucket.cash
+          soirCardAmount += paymentBucket.card
+          soirOtherAmount += paymentBucket.other
+          soirCashOrders += paymentBucket.cash_count
+          soirCardOrders += paymentBucket.card_count
+          soirOtherOrders += paymentBucket.other_count
+        } else if (paymentMethod === "cash") {
           soirCashAmount += amount
           soirCashOrders++
         } else if (paymentMethod === "card") {
@@ -181,7 +254,14 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      if (paymentMethod === "cash") {
+      if (paymentBucket) {
+        totalCashAmount += paymentBucket.cash
+        totalCardAmount += paymentBucket.card
+        totalOtherAmount += paymentBucket.other
+        totalCashOrders += paymentBucket.cash_count
+        totalCardOrders += paymentBucket.card_count
+        totalOtherOrders += paymentBucket.other_count
+      } else if (paymentMethod === "cash") {
         totalCashAmount += amount
         totalCashOrders++
       } else if (paymentMethod === "card") {
@@ -302,7 +382,7 @@ export async function GET(request: NextRequest) {
 
     const insights: Array<{ icon: string; label: string; value: string; color: string }> = []
 
-    insights.push({ icon: "💰", label: "CA total du jour", value: `${totalSales.toFixed(2)} €`, color: "blue" })
+    insights.push({ icon: "💰", label: "CA total TTC du jour", value: `${totalSales.toFixed(2)} €`, color: "blue" })
     insights.push({ icon: "🧾", label: "Nombre de tables", value: `${totalOrders}`, color: "purple" })
     if (totalCovers > 0) {
       insights.push({ icon: "👥", label: "Couverts total", value: `${totalCovers}`, color: "cyan" })
