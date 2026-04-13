@@ -14,6 +14,37 @@ export async function GET(request: NextRequest) {
     const customEndDate = searchParams.get("endDate")
 
     const supabase = await createClient()
+    const PAGE_SIZE = 1000
+    const ORDER_ID_CHUNK_SIZE = 200
+    const MENU_ID_CHUNK_SIZE = 500
+
+    const fetchRowsByOrderIds = async (table: "order_items" | "supplements", select: string, orderIds: string[]) => {
+      const rows: any[] = []
+      if (orderIds.length === 0) return rows
+
+      for (let i = 0; i < orderIds.length; i += ORDER_ID_CHUNK_SIZE) {
+        const orderIdChunk = orderIds.slice(i, i + ORDER_ID_CHUNK_SIZE)
+        let offset = 0
+
+        while (true) {
+          const { data, error } = await supabase
+            .from(table)
+            .select(select)
+            .in("order_id", orderIdChunk)
+            .order("id", { ascending: true })
+            .range(offset, offset + PAGE_SIZE - 1)
+
+          if (error) throw error
+          if (!data || data.length === 0) break
+
+          rows.push(...data)
+          if (data.length < PAGE_SIZE) break
+          offset += PAGE_SIZE
+        }
+      }
+
+      return rows
+    }
 
     // Calculate date range
     const endDate = new Date()
@@ -28,10 +59,10 @@ export async function GET(request: NextRequest) {
     } else {
       switch (period) {
         case "7days":
-          startDate.setDate(endDate.getDate() - 7)
+          startDate.setDate(endDate.getDate() - 6)
           break
         case "30days":
-          startDate.setDate(endDate.getDate() - 30)
+          startDate.setDate(endDate.getDate() - 29)
           break
         case "3months":
           startDate.setMonth(endDate.getMonth() - 3)
@@ -42,8 +73,6 @@ export async function GET(request: NextRequest) {
     const startDateStr = period === "today" ? new Date().toISOString().split("T")[0] : startDate.toISOString().split("T")[0]
     const endDateStr = period === "today" ? new Date().toISOString().split("T")[0] : endDate.toISOString().split("T")[0]
     const effectiveStartDateStr = clampDateToRestaurantOpening(startDateStr)
-    const effectiveStartTimestamp = `${effectiveStartDateStr}T00:00:00.000Z`
-    const effectiveEndTimestamp = `${endDateStr}T23:59:59.999Z`
 
     if (isBeforeRestaurantOpeningDate(endDateStr)) {
       return NextResponse.json({
@@ -81,13 +110,26 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // Fetch daily sales data
-    const { data: dailySales } = await supabase
-      .from("daily_sales")
-      .select("*")
-      .gte("date", effectiveStartDateStr)
-      .lte("date", endDateStr)
-      .order("date", { ascending: true })
+    // Fetch daily sales data (paginated to avoid default row limits)
+    const dailySales: any[] = []
+    let salesOffset = 0
+    while (true) {
+      const { data: salesPage, error: salesPageError } = await supabase
+        .from("daily_sales")
+        .select("*")
+        .gte("date", effectiveStartDateStr)
+        .lte("date", endDateStr)
+        .order("date", { ascending: true })
+        .order("created_at", { ascending: true })
+        .range(salesOffset, salesOffset + PAGE_SIZE - 1)
+
+      if (salesPageError) throw salesPageError
+      if (!salesPage || salesPage.length === 0) break
+
+      dailySales.push(...salesPage)
+      if (salesPage.length < PAGE_SIZE) break
+      salesOffset += PAGE_SIZE
+    }
 
     // Group by date for chart
     const salesByDate = (dailySales || []).reduce((acc: any, sale: any) => {
@@ -137,97 +179,85 @@ export async function GET(request: NextRequest) {
       0,
     )
 
-    // Calculate TVA precisely from item tax rates
+    // Calculate TVA and top dishes from all sold order lines in range.
     const orderIds = (dailySales || []).map((sale: any) => sale.order_id).filter(Boolean)
+    const uniqueOrderIds = Array.from(new Set(orderIds))
     const orderIdToServer = new Map(
       (dailySales || []).map((sale: any) => [sale.order_id, sale.server_name || "Inconnu"]),
     )
+
+    const allOrderItems = await fetchRowsByOrderIds(
+      "order_items",
+      "order_id, menu_item_id, quantity, price, is_complimentary",
+      uniqueOrderIds,
+    )
+    const allSupplements = await fetchRowsByOrderIds(
+      "supplements",
+      "order_id, amount, tax_rate, is_complimentary",
+      uniqueOrderIds,
+    )
+
+    const uniqueMenuItemIds = Array.from(new Set(allOrderItems.map((item: any) => item.menu_item_id).filter(Boolean)))
+    const menuMetaById = new Map<string, { name: string; tax_rate: number }>()
+    for (let i = 0; i < uniqueMenuItemIds.length; i += MENU_ID_CHUNK_SIZE) {
+      const menuIdChunk = uniqueMenuItemIds.slice(i, i + MENU_ID_CHUNK_SIZE)
+      const { data: menuChunk, error: menuChunkError } = await supabase
+        .from("menu_items")
+        .select("id, name, tax_rate")
+        .in("id", menuIdChunk)
+      if (menuChunkError) throw menuChunkError
+      for (const item of menuChunk || []) {
+        menuMetaById.set(item.id, { name: item.name, tax_rate: Number(item.tax_rate) || 0 })
+      }
+    }
 
     let totalTax = 0
     let rate10Sales = 0
     let rate20Sales = 0
     const taxByServer: Record<string, number> = {}
+    const dishStats: Record<string, { name: string; quantity: number; revenue: number }> = {}
 
-    if (orderIds.length > 0) {
-      const { data: orderItems } = await supabase
-        .from("order_items")
-        .select("order_id, menu_item_id, quantity, price, is_complimentary")
-        .in("order_id", orderIds)
+    for (const item of allOrderItems || []) {
+      if (!item?.menu_item_id || item.is_complimentary) continue
+      const quantity = Number(item.quantity || 0)
+      if (quantity <= 0) continue
 
-      const menuItemIds = Array.from(new Set((orderItems || []).map((item: any) => item.menu_item_id).filter(Boolean)))
+      const meta = menuMetaById.get(item.menu_item_id)
+      if (!meta) continue
 
-      const { data: menuItems } = await supabase
-        .from("menu_items")
-        .select("id, tax_rate")
-        .in("id", menuItemIds)
+      const lineTotal = Number(item.price || 0) * quantity
+      const rate = meta.tax_rate
+      const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
+      totalTax += lineTax
 
-      const menuItemTaxMap = new Map((menuItems || []).map((item: any) => [item.id, Number(item.tax_rate) || 0]))
+      const serverName = orderIdToServer.get(item.order_id) || "Inconnu"
+      taxByServer[serverName] = (taxByServer[serverName] || 0) + lineTax
+      if (rate === 10) rate10Sales += lineTotal
+      if (rate === 20) rate20Sales += lineTotal
 
-      for (const item of orderItems || []) {
-        if (item.is_complimentary) continue
-        const rate = menuItemTaxMap.get(item.menu_item_id) || 0
-        const lineTotal = Number(item.price) * Number(item.quantity || 0)
-        const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
-
-        totalTax += lineTax
-        const serverName = orderIdToServer.get(item.order_id) || "Inconnu"
-        taxByServer[serverName] = (taxByServer[serverName] || 0) + lineTax
-        if (rate === 10) rate10Sales += lineTotal
-        if (rate === 20) rate20Sales += lineTotal
+      if (!dishStats[item.menu_item_id]) {
+        dishStats[item.menu_item_id] = { name: meta.name, quantity: 0, revenue: 0 }
       }
+      dishStats[item.menu_item_id].quantity += quantity
+      dishStats[item.menu_item_id].revenue += lineTotal
+    }
 
-      const { data: supplements } = await supabase
-        .from("supplements")
-        .select("order_id, amount, tax_rate, is_complimentary")
-        .in("order_id", orderIds)
+    for (const sup of allSupplements || []) {
+      if (sup?.is_complimentary) continue
+      const rate = Number(sup?.tax_rate ?? 10)
+      const lineTotal = Number(sup?.amount) || 0
+      const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
 
-      for (const sup of supplements || []) {
-        if (sup.is_complimentary) continue
-        const rate = Number(sup.tax_rate ?? 10)
-        const lineTotal = Number(sup.amount) || 0
-        const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
-
-        totalTax += lineTax
-        const serverName = orderIdToServer.get(sup.order_id) || "Inconnu"
-        taxByServer[serverName] = (taxByServer[serverName] || 0) + lineTax
-        if (rate === 10) rate10Sales += lineTotal
-        if (rate === 20) rate20Sales += lineTotal
-      }
+      totalTax += lineTax
+      const serverName = orderIdToServer.get(sup?.order_id) || "Inconnu"
+      taxByServer[serverName] = (taxByServer[serverName] || 0) + lineTax
+      if (rate === 10) rate10Sales += lineTotal
+      if (rate === 20) rate20Sales += lineTotal
     }
 
     const totalSalesHT = totalSales - totalTax
     const taxRate10Share = totalSales > 0 ? (rate10Sales / totalSales) * 100 : 0
     const taxRate20Share = totalSales > 0 ? (rate20Sales / totalSales) * 100 : 0
-
-    // Fetch top dishes
-    const { data: orderItems } = await supabase
-      .from("order_items")
-      .select(`
-        menu_item_id,
-        quantity,
-        price,
-        created_at
-      `)
-      .gte("created_at", effectiveStartTimestamp)
-      .lte("created_at", effectiveEndTimestamp)
-
-    const { data: menuItems } = await supabase.from("menu_items").select("*")
-
-    const dishStats = (orderItems || []).reduce((acc: any, item: any) => {
-      const menuItem = menuItems?.find((m: any) => m.id === item.menu_item_id)
-      if (menuItem) {
-        if (!acc[item.menu_item_id]) {
-          acc[item.menu_item_id] = {
-            name: menuItem.name,
-            quantity: 0,
-            revenue: 0,
-          }
-        }
-        acc[item.menu_item_id].quantity += item.quantity
-        acc[item.menu_item_id].revenue += item.quantity * Number.parseFloat(item.price)
-      }
-      return acc
-    }, {})
 
     const topDishes = Object.values(dishStats)
       .sort((a: any, b: any) => b.quantity - a.quantity)
@@ -257,18 +287,26 @@ export async function GET(request: NextRequest) {
     for (let h = 0; h < 24; h++) {
       hourlyMap[h] = { hour: h, total: 0, orders: 0 }
     }
-    const daysInPeriod = new Set<string>()
 
-    // Fetch order open times for all sales
-    const saleOrderIds = (dailySales || []).map((s: any) => s.order_id).filter(Boolean)
+    // Fetch order open/close/cover data in chunks to avoid row limits.
+    const ordersForStats: Array<{ id: string; covers: number | null; created_at: string | null; closed_at: string | null }> = []
+    if (uniqueOrderIds.length > 0) {
+      for (let i = 0; i < uniqueOrderIds.length; i += ORDER_ID_CHUNK_SIZE) {
+        const orderIdChunk = uniqueOrderIds.slice(i, i + ORDER_ID_CHUNK_SIZE)
+        const { data: ordersChunk, error: ordersChunkError } = await supabase
+          .from("orders")
+          .select("id, covers, created_at, closed_at")
+          .in("id", orderIdChunk)
+
+        if (ordersChunkError) throw ordersChunkError
+        ordersForStats.push(...(ordersChunk || []))
+      }
+    }
+
     const orderOpenTimeMap = new Map<string, string>()
-    if (saleOrderIds.length > 0) {
-      const { data: orderTimes } = await supabase
-        .from("orders")
-        .select("id, created_at")
-        .in("id", saleOrderIds)
-      for (const o of orderTimes || []) {
-        if (o.created_at) orderOpenTimeMap.set(o.id, o.created_at)
+    for (const order of ordersForStats) {
+      if (order?.id && order.created_at) {
+        orderOpenTimeMap.set(order.id, order.created_at)
       }
     }
 
@@ -281,9 +319,14 @@ export async function GET(request: NextRequest) {
       const hour = d.getHours()
       hourlyMap[hour].total += Number.parseFloat(sale.total_amount)
       hourlyMap[hour].orders += 1
-      daysInPeriod.add(d.toISOString().split("T")[0])
     }
-    const numDays = Math.max(daysInPeriod.size, 1)
+
+    // Active days should follow sales dates from daily_sales to avoid timezone drift.
+    const activeDaySet = new Set(
+      (dailySales || []).map((sale: any) => String(sale.date || "")).filter((value: string) => value.length > 0),
+    )
+    const activeDays = activeDaySet.size
+    const numDays = Math.max(activeDays, 1)
     const hourlySales = Object.values(hourlyMap)
       .filter((h) => h.total > 0 || (h.hour >= 10 && h.hour <= 23)) // Only show relevant hours
       .map((h) => ({
@@ -294,7 +337,6 @@ export async function GET(request: NextRequest) {
       }))
 
     // ── Days open / closed calculation ──
-    const activeDays = daysInPeriod.size
     // Calculate total calendar days in the period
     const periodStartMs = new Date(effectiveStartDateStr).getTime()
     const periodEndMs = new Date(endDateStr).getTime()
@@ -302,43 +344,34 @@ export async function GET(request: NextRequest) {
     const dailyAverage = activeDays > 0 ? totalSales / activeDays : 0
 
     // ── Covers (couverts) & Duration stats ──
-    const orderIdsForCovers = (dailySales || []).map((s: any) => s.order_id).filter(Boolean)
     let totalCovers = 0
     let ordersWithCovers = 0
     const durations: number[] = []
-    const serverDurationMap: Record<string, { totalDuration: number; count: number; totalCovers: number }> = {}
+    const serverDurationMap: Record<string, { totalDuration: number; count: number }> = {}
+    const serverCoversMap: Record<string, number> = {}
+    const orderToServer = new Map(
+      (dailySales || []).map((sale: any) => [sale.order_id, sale.server_name || "Inconnu"]),
+    )
 
-    if (orderIdsForCovers.length > 0) {
-      const { data: ordersData } = await supabase
-        .from("orders")
-        .select("id, covers, created_at, closed_at, server_id")
-        .in("id", orderIdsForCovers)
+    for (const order of ordersForStats) {
+      if (order.covers != null && order.covers > 0) {
+        totalCovers += order.covers
+        ordersWithCovers++
+        const serverName = orderToServer.get(order.id) || "Inconnu"
+        serverCoversMap[serverName] = (serverCoversMap[serverName] || 0) + order.covers
+      }
 
-      // Map order_id → server_name from dailySales
-      const orderToServer = new Map(
-        (dailySales || []).map((s: any) => [s.order_id, s.server_name || "Inconnu"]),
-      )
-
-      for (const o of ordersData || []) {
-        if (o.covers != null && o.covers > 0) {
-          totalCovers += o.covers
-          ordersWithCovers++
-        }
-        // Duration calculation (only if closed_at exists and duration is reasonable: < 6h)
-        if (o.created_at && o.closed_at) {
-          const durationMin = (new Date(o.closed_at).getTime() - new Date(o.created_at).getTime()) / 60000
-          if (durationMin > 0 && durationMin < 360) {
-            durations.push(durationMin)
-            const sName = orderToServer.get(o.id) || "Inconnu"
-            if (!serverDurationMap[sName]) {
-              serverDurationMap[sName] = { totalDuration: 0, count: 0, totalCovers: 0 }
-            }
-            serverDurationMap[sName].totalDuration += durationMin
-            serverDurationMap[sName].count += 1
-            if (o.covers != null && o.covers > 0) {
-              serverDurationMap[sName].totalCovers += o.covers
-            }
+      // Duration calculation (only if closed_at exists and duration is reasonable: < 6h)
+      if (order.created_at && order.closed_at) {
+        const durationMin = (new Date(order.closed_at).getTime() - new Date(order.created_at).getTime()) / 60000
+        if (durationMin > 0 && durationMin < 360) {
+          durations.push(durationMin)
+          const serverName = orderToServer.get(order.id) || "Inconnu"
+          if (!serverDurationMap[serverName]) {
+            serverDurationMap[serverName] = { totalDuration: 0, count: 0 }
           }
+          serverDurationMap[serverName].totalDuration += durationMin
+          serverDurationMap[serverName].count += 1
         }
       }
     }
@@ -352,14 +385,15 @@ export async function GET(request: NextRequest) {
     // ── Build final server stats (after duration data is available) ──
     const serverStats = Object.values(serverStatsMap).map((server: any) => {
       const durationData = serverDurationMap[server.server_name]
+      const serverCovers = serverCoversMap[server.server_name] || 0
       return {
         ...server,
         total_sales_ht: server.total_sales - (taxByServer[server.server_name] || 0),
         average_ticket: server.order_count > 0 ? server.total_sales / server.order_count : 0,
         complimentary_percentage: server.total_sales > 0 ? (server.complimentary_amount / server.total_sales) * 100 : 0,
         avg_duration: durationData ? Math.round(durationData.totalDuration / durationData.count) : null,
-        total_covers: durationData?.totalCovers || 0,
-        revenue_per_cover: durationData && durationData.totalCovers > 0 ? server.total_sales / durationData.totalCovers : null,
+        total_covers: serverCovers,
+        revenue_per_cover: serverCovers > 0 ? server.total_sales / serverCovers : null,
       }
     })
 
