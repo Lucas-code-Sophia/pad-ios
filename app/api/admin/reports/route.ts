@@ -261,7 +261,7 @@ export async function GET(request: NextRequest) {
 
     const topDishes = Object.values(dishStats)
       .sort((a: any, b: any) => b.quantity - a.quantity)
-      .slice(0, 10)
+      .slice(0, 50)
 
     // Fetch server stats
     const serverStatsMap = (dailySales || []).reduce((acc: any, sale: any) => {

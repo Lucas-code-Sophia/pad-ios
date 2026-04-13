@@ -124,6 +124,8 @@ interface ServiceSummaryData {
   }
 }
 
+const TOP_DISHES_OPTIONS = [10, 20, 30, 50] as const
+
 export default function ReportsPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
@@ -134,6 +136,7 @@ export default function ReportsPage() {
   const [salesData, setSalesData] = useState<SalesData[]>([])
   const [hourlySales, setHourlySales] = useState<HourlySalesData[]>([])
   const [topDishes, setTopDishes] = useState<TopDish[]>([])
+  const [topDishesLimit, setTopDishesLimit] = useState<(typeof TOP_DISHES_OPTIONS)[number]>(10)
   const [serverStats, setServerStats] = useState<ServerStats[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -281,6 +284,9 @@ export default function ReportsPage() {
     const m = min % 60
     return m > 0 ? `${h}h${m.toString().padStart(2, "0")}` : `${h}h`
   }
+
+  const displayedTopDishes = topDishes.slice(0, topDishesLimit)
+  const topDishesChartHeight = Math.max(350, displayedTopDishes.length * 34)
 
   return (
     <div className="min-h-screen bg-slate-900 p-3 sm:p-6">
@@ -656,49 +662,73 @@ export default function ReportsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="bg-gradient-to-br from-amber-900/30 to-orange-800/20 border-amber-700/40 backdrop-blur-md">
           <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <div className="p-2 bg-amber-500/30 rounded-lg">
-                <ShoppingBag className="h-4 w-4 text-amber-400" />
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <CardTitle className="text-white flex items-center gap-2">
+                <div className="p-2 bg-amber-500/30 rounded-lg">
+                  <ShoppingBag className="h-4 w-4 text-amber-400" />
+                </div>
+                Top {topDishesLimit} des plats
+              </CardTitle>
+              <div className="flex items-center gap-1">
+                {TOP_DISHES_OPTIONS.map((value) => (
+                  <Button
+                    key={value}
+                    type="button"
+                    size="sm"
+                    variant={topDishesLimit === value ? "default" : "outline"}
+                    onClick={() => setTopDishesLimit(value)}
+                    className={
+                      topDishesLimit === value
+                        ? "h-7 px-2 text-xs bg-amber-600 hover:bg-amber-700 text-white"
+                        : "h-7 px-2 text-xs bg-slate-800 border-slate-600 text-slate-200 hover:bg-slate-700"
+                    }
+                  >
+                    Top {value}
+                  </Button>
+                ))}
               </div>
-              Top 10 des plats
-            </CardTitle>
+            </div>
           </CardHeader>
           <CardContent>
-            <ChartContainer
-              config={{
-                quantity: {
-                  label: "Quantité",
-                  color: "#f59e0b", // Amber color
-                },
-              }}
-              className="h-[350px] [&_.recharts-cartesian-axis-tick_text]:fill-slate-100 [&_.recharts-legend-item-text]:fill-slate-200"
-            >
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={topDishes.slice(0, 10)} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.18)" />
-                  <XAxis
-                    type="number"
-                    stroke="rgba(248, 250, 252, 0.9)"
-                    tick={{ fill: "#f8fafc", fontSize: 12 }}
-                    tickLine={{ stroke: "rgba(248, 250, 252, 0.8)" }}
-                    axisLine={{ stroke: "rgba(248, 250, 252, 0.7)" }}
-                  />
-                  <YAxis
-                    dataKey="name"
-                    type="category"
-                    stroke="rgba(248, 250, 252, 0.9)"
-                    tick={{ fill: "#f8fafc", fontSize: 12 }}
-                    tickLine={{ stroke: "rgba(248, 250, 252, 0.8)" }}
-                    axisLine={{ stroke: "rgba(248, 250, 252, 0.7)" }}
-                    width={120}
-                  />
-                  <ChartTooltip 
-                    content={<ChartTooltipContent />}
-                  />
-                  <Bar dataKey="quantity" fill="#f59e0b" name="Quantité vendue" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </ChartContainer>
+            <div className="max-h-[70vh] overflow-y-auto pr-1">
+              <div style={{ height: `${topDishesChartHeight}px` }}>
+                <ChartContainer
+                  config={{
+                    quantity: {
+                      label: "Quantité",
+                      color: "#f59e0b", // Amber color
+                    },
+                  }}
+                  className="h-full [&_.recharts-cartesian-axis-tick_text]:fill-slate-100 [&_.recharts-legend-item-text]:fill-slate-200"
+                >
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={displayedTopDishes} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.18)" />
+                      <XAxis
+                        type="number"
+                        stroke="rgba(248, 250, 252, 0.9)"
+                        tick={{ fill: "#f8fafc", fontSize: 12 }}
+                        tickLine={{ stroke: "rgba(248, 250, 252, 0.8)" }}
+                        axisLine={{ stroke: "rgba(248, 250, 252, 0.7)" }}
+                      />
+                      <YAxis
+                        dataKey="name"
+                        type="category"
+                        stroke="rgba(248, 250, 252, 0.9)"
+                        tick={{ fill: "#f8fafc", fontSize: 12 }}
+                        tickLine={{ stroke: "rgba(248, 250, 252, 0.8)" }}
+                        axisLine={{ stroke: "rgba(248, 250, 252, 0.7)" }}
+                        width={120}
+                      />
+                      <ChartTooltip 
+                        content={<ChartTooltipContent />}
+                      />
+                      <Bar dataKey="quantity" fill="#f59e0b" name="Quantité vendue" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </ChartContainer>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
