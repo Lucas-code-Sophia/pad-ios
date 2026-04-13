@@ -39,9 +39,12 @@ interface HourlySalesData {
 }
 
 interface TopDish {
+  menu_item_id?: string
   name: string
   quantity: number
   revenue: number
+  dailySales?: Array<{ date: string; quantity: number }>
+  bestDay?: { date: string; quantity: number } | null
 }
 
 interface ServerStats {
@@ -124,7 +127,7 @@ interface ServiceSummaryData {
   }
 }
 
-const TOP_DISHES_OPTIONS = [10, 20, 30, 50] as const
+const TOP_DISHES_OPTIONS = [10, 20, 30, 50, 100] as const
 
 export default function ReportsPage() {
   const { user, isLoading } = useAuth()
@@ -137,6 +140,7 @@ export default function ReportsPage() {
   const [hourlySales, setHourlySales] = useState<HourlySalesData[]>([])
   const [topDishes, setTopDishes] = useState<TopDish[]>([])
   const [topDishesLimit, setTopDishesLimit] = useState<(typeof TOP_DISHES_OPTIONS)[number]>(10)
+  const [selectedTopDishId, setSelectedTopDishId] = useState<string | null>(null)
   const [serverStats, setServerStats] = useState<ServerStats[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -197,6 +201,12 @@ export default function ReportsPage() {
       fetchServiceSummary()
     }
   }, [user, summaryDate, activeTab])
+
+  useEffect(() => {
+    if (selectedTopDishId && !topDishes.some((dish) => dish.menu_item_id && dish.menu_item_id === selectedTopDishId)) {
+      setSelectedTopDishId(null)
+    }
+  }, [topDishes, selectedTopDishId])
 
   const fetchServiceSummary = async () => {
     try {
@@ -286,7 +296,24 @@ export default function ReportsPage() {
   }
 
   const displayedTopDishes = topDishes.slice(0, topDishesLimit)
+  const displayedTopDishesWithRank = displayedTopDishes.map((dish, index) => {
+    const rank = index + 1
+    const rankPrefix = rank % 10 === 0 ? `[#${rank}]` : `#${rank}`
+    return {
+      ...dish,
+      rank,
+      chartLabel: `${rankPrefix} ${dish.name}`,
+    }
+  })
   const topDishesChartHeight = Math.max(350, displayedTopDishes.length * 34)
+  const selectedTopDish = selectedTopDishId
+    ? topDishes.find((dish) => dish.menu_item_id && dish.menu_item_id === selectedTopDishId) || null
+    : null
+  const selectedTopDishDailyMap = new Map((selectedTopDish?.dailySales || []).map((entry) => [entry.date, entry.quantity]))
+  const selectedTopDishDailyRows = salesData.map((day) => ({
+    date: day.date,
+    quantity: selectedTopDishDailyMap.get(day.date) || 0,
+  }))
 
   return (
     <div className="min-h-screen bg-slate-900 p-3 sm:p-6">
@@ -702,7 +729,7 @@ export default function ReportsPage() {
                   className="h-full [&_.recharts-cartesian-axis-tick_text]:fill-slate-100 [&_.recharts-legend-item-text]:fill-slate-200"
                 >
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={displayedTopDishes} layout="vertical">
+                    <BarChart data={displayedTopDishesWithRank} layout="vertical">
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.18)" />
                       <XAxis
                         type="number"
@@ -712,7 +739,7 @@ export default function ReportsPage() {
                         axisLine={{ stroke: "rgba(248, 250, 252, 0.7)" }}
                       />
                       <YAxis
-                        dataKey="name"
+                        dataKey="chartLabel"
                         type="category"
                         stroke="rgba(248, 250, 252, 0.9)"
                         tick={{ fill: "#f8fafc", fontSize: 12 }}
@@ -723,12 +750,64 @@ export default function ReportsPage() {
                       <ChartTooltip 
                         content={<ChartTooltipContent />}
                       />
-                      <Bar dataKey="quantity" fill="#f59e0b" name="Quantité vendue" radius={[4, 4, 0, 0]} />
+                      <Bar
+                        dataKey="quantity"
+                        fill="#f59e0b"
+                        name="Quantité vendue"
+                        radius={[4, 4, 0, 0]}
+                        cursor="pointer"
+                        onClick={(_, index) => {
+                          const dish = displayedTopDishesWithRank[index]
+                          if (!dish?.menu_item_id) return
+                          setSelectedTopDishId(dish.menu_item_id)
+                        }}
+                      />
                     </BarChart>
                   </ResponsiveContainer>
                 </ChartContainer>
               </div>
             </div>
+            <div className="mt-3 text-xs text-amber-300">Clique sur un plat du graphique pour voir le détail par jour.</div>
+            {selectedTopDish && (
+              <div className="mt-3 rounded-lg border border-amber-700/50 bg-slate-900/60 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-white">{selectedTopDish.name}</div>
+                  <div className="flex items-center gap-2">
+                    <Badge className="bg-amber-600 text-white">Total: {selectedTopDish.quantity}</Badge>
+                    {selectedTopDish.bestDay && (
+                      <span className="text-xs text-amber-200">
+                        Meilleur jour:{" "}
+                        {new Date(`${selectedTopDish.bestDay.date}T00:00:00`).toLocaleDateString("fr-FR", {
+                          weekday: "long",
+                          day: "2-digit",
+                          month: "2-digit",
+                        })}{" "}
+                        ({selectedTopDish.bestDay.quantity})
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-3 max-h-64 overflow-y-auto space-y-1">
+                  {selectedTopDishDailyRows.map((row) => (
+                    <div
+                      key={`${selectedTopDish.menu_item_id || selectedTopDish.name}-${row.date}`}
+                      className="flex items-center justify-between rounded bg-slate-800/70 px-2 py-1 text-xs"
+                    >
+                      <span className="text-slate-200">
+                        {new Date(`${row.date}T00:00:00`).toLocaleDateString("fr-FR", {
+                          weekday: "short",
+                          day: "2-digit",
+                          month: "2-digit",
+                        })}
+                      </span>
+                      <span className={`font-semibold ${row.quantity > 0 ? "text-amber-300" : "text-slate-500"}`}>
+                        {row.quantity}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 

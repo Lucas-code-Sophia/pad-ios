@@ -185,6 +185,9 @@ export async function GET(request: NextRequest) {
     const orderIdToServer = new Map(
       (dailySales || []).map((sale: any) => [sale.order_id, sale.server_name || "Inconnu"]),
     )
+    const orderIdToDate = new Map(
+      (dailySales || []).map((sale: any) => [sale.order_id, String(sale.date || "")]),
+    )
 
     const allOrderItems = await fetchRowsByOrderIds(
       "order_items",
@@ -215,7 +218,16 @@ export async function GET(request: NextRequest) {
     let rate10Sales = 0
     let rate20Sales = 0
     const taxByServer: Record<string, number> = {}
-    const dishStats: Record<string, { name: string; quantity: number; revenue: number }> = {}
+    const dishStats: Record<
+      string,
+      {
+        menu_item_id: string
+        name: string
+        quantity: number
+        revenue: number
+        byDate: Record<string, number>
+      }
+    > = {}
 
     for (const item of allOrderItems || []) {
       if (!item?.menu_item_id || item.is_complimentary) continue
@@ -236,10 +248,21 @@ export async function GET(request: NextRequest) {
       if (rate === 20) rate20Sales += lineTotal
 
       if (!dishStats[item.menu_item_id]) {
-        dishStats[item.menu_item_id] = { name: meta.name, quantity: 0, revenue: 0 }
+        dishStats[item.menu_item_id] = {
+          menu_item_id: item.menu_item_id,
+          name: meta.name,
+          quantity: 0,
+          revenue: 0,
+          byDate: {},
+        }
       }
       dishStats[item.menu_item_id].quantity += quantity
       dishStats[item.menu_item_id].revenue += lineTotal
+
+      const saleDate = orderIdToDate.get(item.order_id)
+      if (saleDate) {
+        dishStats[item.menu_item_id].byDate[saleDate] = (dishStats[item.menu_item_id].byDate[saleDate] || 0) + quantity
+      }
     }
 
     for (const sup of allSupplements || []) {
@@ -261,7 +284,25 @@ export async function GET(request: NextRequest) {
 
     const topDishes = Object.values(dishStats)
       .sort((a: any, b: any) => b.quantity - a.quantity)
-      .slice(0, 50)
+      .slice(0, 100)
+      .map((dish) => {
+        const dailySales = Object.entries(dish.byDate)
+          .map(([date, quantity]) => ({ date, quantity }))
+          .sort((a, b) => a.date.localeCompare(b.date))
+        const bestDay =
+          dailySales.length > 0
+            ? dailySales.reduce((best, current) => (current.quantity > best.quantity ? current : best))
+            : null
+
+        return {
+          menu_item_id: dish.menu_item_id,
+          name: dish.name,
+          quantity: dish.quantity,
+          revenue: dish.revenue,
+          dailySales,
+          bestDay,
+        }
+      })
 
     // Fetch server stats
     const serverStatsMap = (dailySales || []).reduce((acc: any, sale: any) => {
