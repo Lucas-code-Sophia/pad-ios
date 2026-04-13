@@ -174,6 +174,9 @@ export default function OrderPage() {
   const [rhumArrangeDialogOpen, setRhumArrangeDialogOpen] = useState(false)
   const [rhumArrangeItem, setRhumArrangeItem] = useState<MenuItem | null>(null)
   const [rhumArrangeOptions, setRhumArrangeOptions] = useState<string[]>([])
+  const [kirDialogOpen, setKirDialogOpen] = useState(false)
+  const [kirItem, setKirItem] = useState<MenuItem | null>(null)
+  const [kirOptions, setKirOptions] = useState<string[]>([])
   const [spiritDialogOpen, setSpiritDialogOpen] = useState(false)
   const [spiritDialogItem, setSpiritDialogItem] = useState<MenuItem | null>(null)
   const [spiritDialogConfig, setSpiritDialogConfig] = useState<SpiritDialogConfig | null>(null)
@@ -251,6 +254,7 @@ export default function OrderPage() {
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
   const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
   const defaultRhumArrangeOptions = ["Ananas", "Vanille", "Mangue", "Passion", "Coco", "Gingembre"]
+  const defaultKirOptions = ["Pêche", "Cassis"]
   const spiritSelectionConfigs: Record<SpiritSelectionType, SpiritDialogConfig> = {
     gin_tonic: {
       type: "gin_tonic",
@@ -330,6 +334,7 @@ export default function OrderPage() {
   }
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isRhumArrangeItem = (name: string) => normalizeForSearch(name).startsWith("rhum arrange")
+  const isKirItem = (name: string) => /^kir\b/.test(normalizeForSearch(name))
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
   const matchesSpiritBaseName = (name: string, type: SpiritSelectionType) => {
     const normalizedName = normalizeForSearch(name)
@@ -1114,6 +1119,21 @@ export default function OrderPage() {
     setRhumArrangeOptions([])
   }
 
+  const openKirDialog = (item: MenuItem) => {
+    const configuredOptions = parseChoiceOptions(item.details)
+    setKirOptions(configuredOptions.length > 0 ? configuredOptions : defaultKirOptions)
+    setKirItem(item)
+    setKirDialogOpen(true)
+  }
+
+  const handleKirSelect = async (flavor: string) => {
+    if (!kirItem) return
+    await addItemsToOrder([{ menuItem: kirItem, notes: `Goût: ${flavor}` }])
+    setKirDialogOpen(false)
+    setKirItem(null)
+    setKirOptions([])
+  }
+
   const openSpiritDialog = (item: MenuItem, config: SpiritDialogConfig) => {
     setSpiritDialogItem(item)
     setSpiritDialogConfig(config)
@@ -1269,6 +1289,10 @@ export default function OrderPage() {
     }
     if (isRhumArrangeItem(item.name)) {
       openRhumArrangeDialog(item)
+      return
+    }
+    if (isKirItem(item.name)) {
+      openKirDialog(item)
       return
     }
     const spiritConfig = getSpiritSelectionConfig(item)
@@ -2115,7 +2139,6 @@ export default function OrderPage() {
           !displayedItems.some((menuItem) => matchesSpiritBaseName(menuItem.name || "", baseItem.type)),
       )
     : []
-  const quickRhumButtonEnabled = isAlcoolsCategorySelected && !hasSearchQuery
   const cartTotal =
     cart.reduce((sum, item) => sum + (item.isComplimentary ? 0 : getCartItemPrice(item) * item.quantity), 0) +
     supplements.reduce((sum, sup) => sum + (sup.isComplimentary ? 0 : sup.amount), 0) +
@@ -2395,22 +2418,6 @@ export default function OrderPage() {
                     </div>
                   </Card>
                 ))}
-
-                {quickRhumButtonEnabled && (
-                  <Card
-                    key="quick-rhum-button"
-                    className="p-3 sm:p-4 bg-amber-900/20 border-2 border-amber-700/70 hover:bg-amber-900/35 cursor-pointer transition-colors"
-                    onClick={() => {
-                      void ensureSpiritBaseItemAndOpenDialog("rhum")
-                    }}
-                  >
-                    <div className="text-center">
-                      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300 mb-1">Alcools</div>
-                      <div className="font-semibold text-sm sm:text-base text-white mb-1">Rhum</div>
-                      <div className="text-xs sm:text-sm text-amber-200">Choisir la marque (4cl)</div>
-                    </div>
-                  </Card>
-                )}
 
                 {missingSpiritBaseItems.map((baseItem) => (
                   <Card
@@ -3050,6 +3057,48 @@ export default function OrderPage() {
                 setRhumArrangeDialogOpen(false)
                 setRhumArrangeItem(null)
                 setRhumArrangeOptions([])
+              }}
+              className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+            >
+              Annuler
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kir Dialog */}
+      <Dialog
+        open={kirDialogOpen}
+        onOpenChange={(open) => {
+          setKirDialogOpen(open)
+          if (!open) {
+            setKirItem(null)
+            setKirOptions([])
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🍷 Choix du goût — {kirItem?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 py-3">
+            {kirOptions.map((option) => (
+              <Button
+                key={option}
+                onClick={() => handleKirSelect(option)}
+                className="h-14 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-rose-600 hover:border-rose-500 transition-colors"
+              >
+                {option}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setKirDialogOpen(false)
+                setKirItem(null)
+                setKirOptions([])
               }}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >
