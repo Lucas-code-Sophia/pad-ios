@@ -134,39 +134,50 @@ export default function MenuEditorPage() {
         }),
       })
 
-      if (response.ok) {
-        const savedItem = await response.json()
-        const itemId = editingItem ? editingItem.id : savedItem.id
-
-        // Save allergen assignments
-        if (itemId) {
-          await fetch(`/api/menu/items/${itemId}/allergens`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ allergen_ids: itemAllergenIds }),
-          })
-        }
-
-        setEditDialog(false)
-        setEditingItem(null)
-        setItemAllergenIds([])
-        setNewItem({
-          name: "",
-          details: "",
-          price: "",
-          tax_rate: "20",
-          category: "",
-          routing: "kitchen",
-          out_of_stock: false,
-          stock_quantity: "",
-          button_color: "",
-          status: true,
-          is_piatto_del_giorno: false,
-        })
-        fetchMenu()
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(payload?.error || "Impossible d'enregistrer l'article.")
+        return
       }
+
+      const savedItem = payload
+      const itemId = editingItem ? editingItem.id : savedItem.id
+
+      // Save allergen assignments
+      if (itemId) {
+        await fetch(`/api/menu/items/${itemId}/allergens`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ allergen_ids: itemAllergenIds }),
+        })
+      }
+
+      if (savedItem?.stock_tracking_unavailable) {
+        alert(
+          "Article enregistré, mais le décompte automatique n'est pas actif (table inventory absente en base). Lance la migration SQL 015_add_inventory_table.sql."
+        )
+      }
+
+      setEditDialog(false)
+      setEditingItem(null)
+      setItemAllergenIds([])
+      setNewItem({
+        name: "",
+        details: "",
+        price: "",
+        tax_rate: "20",
+        category: "",
+        routing: "kitchen",
+        out_of_stock: false,
+        stock_quantity: "",
+        button_color: "",
+        status: true,
+        is_piatto_del_giorno: false,
+      })
+      fetchMenu()
     } catch (error) {
       console.error("[v0] Error saving item:", error)
+      alert("Erreur réseau pendant l'enregistrement.")
     }
   }
 

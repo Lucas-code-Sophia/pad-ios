@@ -14,6 +14,12 @@ const parseOptionalStockQuantity = (raw: unknown): number | null | undefined => 
   return Math.max(0, Math.floor(parsed))
 }
 
+const isInventoryTableMissingError = (error: any) => {
+  const code = String(error?.code || "")
+  const message = String(error?.message || "").toLowerCase()
+  return code === "42P01" || message.includes("relation") && message.includes("inventory")
+}
+
 export async function GET() {
   try {
     const supabase = await createClient()
@@ -139,9 +145,22 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to create item" }, { status: 500 })
     }
 
+    let stockTrackingUnavailable = false
+    let savedStockQuantity: number | null = parsedStockQuantity ?? null
+
     if (parsedStockQuantity !== undefined) {
       if (parsedStockQuantity === null) {
-        await supabase.from("inventory").delete().eq("menu_item_id", data.id)
+        const { error: inventoryDeleteError } = await supabase.from("inventory").delete().eq("menu_item_id", data.id)
+        if (inventoryDeleteError) {
+          if (isInventoryTableMissingError(inventoryDeleteError)) {
+            stockTrackingUnavailable = true
+            savedStockQuantity = null
+            console.warn("[v0] Inventory table missing; stock quantity not persisted")
+          } else {
+            console.error("[v0] Error clearing inventory quantity:", inventoryDeleteError)
+            return NextResponse.json({ error: "Failed to clear inventory quantity" }, { status: 500 })
+          }
+        }
       } else {
         const { error: inventoryError } = await supabase.from("inventory").upsert(
           {
@@ -153,15 +172,22 @@ export async function POST(request: Request) {
         )
 
         if (inventoryError) {
-          console.error("[v0] Error saving inventory quantity:", inventoryError)
-          return NextResponse.json({ error: "Failed to save inventory quantity" }, { status: 500 })
+          if (isInventoryTableMissingError(inventoryError)) {
+            stockTrackingUnavailable = true
+            savedStockQuantity = null
+            console.warn("[v0] Inventory table missing; stock quantity not persisted")
+          } else {
+            console.error("[v0] Error saving inventory quantity:", inventoryError)
+            return NextResponse.json({ error: "Failed to save inventory quantity" }, { status: 500 })
+          }
         }
       }
     }
 
     return NextResponse.json({
       ...data,
-      stock_quantity: parsedStockQuantity ?? null,
+      stock_quantity: savedStockQuantity,
+      stock_tracking_unavailable: stockTrackingUnavailable,
     })
   } catch (error) {
     console.error("[v0] Error in menu create API:", error)

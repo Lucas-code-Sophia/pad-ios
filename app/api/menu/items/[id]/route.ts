@@ -14,6 +14,12 @@ const parseOptionalStockQuantity = (raw: unknown): number | null | undefined => 
   return Math.max(0, Math.floor(parsed))
 }
 
+const isInventoryTableMissingError = (error: any) => {
+  const code = String(error?.code || "")
+  const message = String(error?.message || "").toLowerCase()
+  return code === "42P01" || message.includes("relation") && message.includes("inventory")
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   try {
     const { name, details, price, tax_rate, category, routing, out_of_stock, button_color, status, is_piatto_del_giorno, stock_quantity } = await request.json()
@@ -75,12 +81,21 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: "Failed to update item" }, { status: 500 })
     }
 
+    let stockTrackingUnavailable = false
+    let savedStockQuantity: number | null = parsedStockQuantity ?? null
+
     if (parsedStockQuantity !== undefined) {
       if (parsedStockQuantity === null) {
         const { error: inventoryDeleteError } = await supabase.from("inventory").delete().eq("menu_item_id", id)
         if (inventoryDeleteError) {
-          console.error("[v0] Error clearing inventory quantity:", inventoryDeleteError)
-          return NextResponse.json({ error: "Failed to clear inventory quantity" }, { status: 500 })
+          if (isInventoryTableMissingError(inventoryDeleteError)) {
+            stockTrackingUnavailable = true
+            savedStockQuantity = null
+            console.warn("[v0] Inventory table missing; stock quantity not persisted")
+          } else {
+            console.error("[v0] Error clearing inventory quantity:", inventoryDeleteError)
+            return NextResponse.json({ error: "Failed to clear inventory quantity" }, { status: 500 })
+          }
         }
       } else {
         const { error: inventoryError } = await supabase.from("inventory").upsert(
@@ -93,13 +108,23 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         )
 
         if (inventoryError) {
-          console.error("[v0] Error saving inventory quantity:", inventoryError)
-          return NextResponse.json({ error: "Failed to save inventory quantity" }, { status: 500 })
+          if (isInventoryTableMissingError(inventoryError)) {
+            stockTrackingUnavailable = true
+            savedStockQuantity = null
+            console.warn("[v0] Inventory table missing; stock quantity not persisted")
+          } else {
+            console.error("[v0] Error saving inventory quantity:", inventoryError)
+            return NextResponse.json({ error: "Failed to save inventory quantity" }, { status: 500 })
+          }
         }
       }
     }
 
-    return NextResponse.json({ success: true, stock_quantity: parsedStockQuantity ?? null })
+    return NextResponse.json({
+      success: true,
+      stock_quantity: savedStockQuantity,
+      stock_tracking_unavailable: stockTrackingUnavailable,
+    })
   } catch (error) {
     console.error("[v0] Error in menu update API:", error)
     const message = error instanceof Error ? error.message : "Internal server error"
