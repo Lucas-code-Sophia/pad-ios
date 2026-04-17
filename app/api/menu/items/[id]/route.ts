@@ -2,11 +2,24 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { normalizeMenuButtonColor } from "@/lib/menu-colors"
 
+const parseOptionalStockQuantity = (raw: unknown): number | null | undefined => {
+  if (raw === undefined) return undefined
+  if (raw === null || raw === "") return null
+
+  const parsed = Number(raw)
+  if (!Number.isFinite(parsed)) {
+    throw new Error("Invalid stock quantity")
+  }
+
+  return Math.max(0, Math.floor(parsed))
+}
+
 export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const { name, details, price, tax_rate, category, routing, out_of_stock, button_color, status, is_piatto_del_giorno } = await request.json()
+    const { name, details, price, tax_rate, category, routing, out_of_stock, button_color, status, is_piatto_del_giorno, stock_quantity } = await request.json()
     const supabase = await createClient()
     const { id } = await params // ← CORRECTION Next.js 15
+    const parsedStockQuantity = parseOptionalStockQuantity(stock_quantity)
 
     let categoryId = null
     if (category) {
@@ -33,6 +46,16 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       updateData.out_of_stock_date = out_of_stock ? new Date().toISOString().split("T")[0] : null
     }
 
+    if (parsedStockQuantity === 0) {
+      updateData.out_of_stock = true
+      updateData.out_of_stock_date = new Date().toISOString().split("T")[0]
+    }
+
+    if (parsedStockQuantity && parsedStockQuantity > 0 && out_of_stock === undefined) {
+      updateData.out_of_stock = false
+      updateData.out_of_stock_date = null
+    }
+
     if (button_color !== undefined) {
       updateData.button_color = normalizeMenuButtonColor(button_color)
     }
@@ -52,9 +75,37 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
       return NextResponse.json({ error: "Failed to update item" }, { status: 500 })
     }
 
-    return NextResponse.json({ success: true })
+    if (parsedStockQuantity !== undefined) {
+      if (parsedStockQuantity === null) {
+        const { error: inventoryDeleteError } = await supabase.from("inventory").delete().eq("menu_item_id", id)
+        if (inventoryDeleteError) {
+          console.error("[v0] Error clearing inventory quantity:", inventoryDeleteError)
+          return NextResponse.json({ error: "Failed to clear inventory quantity" }, { status: 500 })
+        }
+      } else {
+        const { error: inventoryError } = await supabase.from("inventory").upsert(
+          {
+            menu_item_id: id,
+            quantity: parsedStockQuantity,
+            last_updated: new Date().toISOString(),
+          },
+          { onConflict: "menu_item_id" },
+        )
+
+        if (inventoryError) {
+          console.error("[v0] Error saving inventory quantity:", inventoryError)
+          return NextResponse.json({ error: "Failed to save inventory quantity" }, { status: 500 })
+        }
+      }
+    }
+
+    return NextResponse.json({ success: true, stock_quantity: parsedStockQuantity ?? null })
   } catch (error) {
     console.error("[v0] Error in menu update API:", error)
+    const message = error instanceof Error ? error.message : "Internal server error"
+    if (message === "Invalid stock quantity") {
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

@@ -1,6 +1,71 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
+const addStockDeduction = (stockDeductions: Map<string, number>, menuItemId: unknown, quantity: unknown) => {
+  if (typeof menuItemId !== "string" || menuItemId.length === 0) return
+  const normalizedQuantity = Math.max(0, Number(quantity) || 0)
+  if (normalizedQuantity <= 0) return
+  stockDeductions.set(menuItemId, (stockDeductions.get(menuItemId) || 0) + normalizedQuantity)
+}
+
+const applyAutoStockDeduction = async (supabase: any, stockDeductions: Map<string, number>) => {
+  if (stockDeductions.size === 0) return
+
+  const menuItemIds = Array.from(stockDeductions.keys())
+  const nowIso = new Date().toISOString()
+  const today = nowIso.split("T")[0]
+
+  const { data: inventoryRows, error: inventoryError } = await supabase
+    .from("inventory")
+    .select("menu_item_id, quantity")
+    .in("menu_item_id", menuItemIds)
+
+  // Si la table inventory n'est pas disponible, ne pas bloquer l'envoi de commande.
+  if (inventoryError) {
+    console.warn("[v0] Skipping stock auto-decrement (inventory unavailable):", inventoryError.message)
+    return
+  }
+
+  if (!inventoryRows || inventoryRows.length === 0) return
+
+  for (const row of inventoryRows) {
+    const deduction = stockDeductions.get(row.menu_item_id) || 0
+    if (deduction <= 0) continue
+
+    const currentQuantity = Math.max(0, Number(row.quantity) || 0)
+    const nextQuantity = Math.max(0, currentQuantity - deduction)
+
+    if (nextQuantity !== currentQuantity) {
+      const { error: updateInventoryError } = await supabase
+        .from("inventory")
+        .update({
+          quantity: nextQuantity,
+          last_updated: nowIso,
+        })
+        .eq("menu_item_id", row.menu_item_id)
+
+      if (updateInventoryError) {
+        console.error("[v0] Error updating inventory quantity:", updateInventoryError)
+        continue
+      }
+    }
+
+    if (nextQuantity === 0) {
+      const { error: stockFlagError } = await supabase
+        .from("menu_items")
+        .update({
+          out_of_stock: true,
+          out_of_stock_date: today,
+        })
+        .eq("id", row.menu_item_id)
+
+      if (stockFlagError) {
+        console.error("[v0] Error flagging menu item out of stock:", stockFlagError)
+      }
+    }
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { tableId, serverId, items, supplements, orderId, covers } = await request.json()
@@ -67,6 +132,26 @@ export async function POST(request: NextRequest) {
     // Gérer les articles existants et nouveaux séparément
     const existingItems = items.filter((item: any) => !item.cartItemId.startsWith('temp-'))
     const newItems = items.filter((item: any) => item.cartItemId.startsWith('temp-'))
+    const firedExistingCandidateIds = existingItems
+      .filter((item: any) => item.status === "fired")
+      .map((item: any) => item.cartItemId)
+      .filter((id: any) => typeof id === "string" && id.length > 0)
+
+    let existingStatusMap = new Map<string, string>()
+    if (firedExistingCandidateIds.length > 0) {
+      const { data: existingRows, error: existingRowsError } = await supabase
+        .from("order_items")
+        .select("id, status")
+        .eq("order_id", currentOrderId)
+        .in("id", firedExistingCandidateIds)
+
+      if (existingRowsError) {
+        console.error("[v0] Error reading current order items before stock deduction:", existingRowsError)
+        return NextResponse.json({ error: "Failed to compute stock deduction" }, { status: 500 })
+      }
+
+      existingStatusMap = new Map((existingRows || []).map((row: any) => [row.id, row.status]))
+    }
 
     // Mettre à jour les articles existants
     const updatePromises = existingItems.map(async (item: any) => {
@@ -127,6 +212,20 @@ export async function POST(request: NextRequest) {
     })
 
     await Promise.all([...updatePromises, ...insertPromises])
+
+    const stockDeductions = new Map<string, number>()
+    newItems.forEach((item: any) => {
+      if (item.status === "fired") {
+        addStockDeduction(stockDeductions, item.menuItemId, item.quantity)
+      }
+    })
+    existingItems.forEach((item: any) => {
+      if (item.status !== "fired") return
+      const previousStatus = existingStatusMap.get(item.cartItemId)
+      if (previousStatus === "fired") return
+      addStockDeduction(stockDeductions, item.menuItemId, item.quantity)
+    })
+    await applyAutoStockDeduction(supabase, stockDeductions)
 
     if (supplements && supplements.length > 0) {
       const supplementRecords = supplements.map((sup: any) => ({

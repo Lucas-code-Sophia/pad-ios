@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ArrowLeft, Plus, Pencil, Trash2, Search, AlertCircle, CheckCircle, Settings, Edit, ArrowUp, ArrowDown, Palette, ShieldAlert, Star } from "lucide-react"
+import { ArrowLeft, Plus, Pencil, Trash2, Search, AlertCircle, CheckCircle, Settings, Edit, ArrowUp, ArrowDown, Palette, ShieldAlert, Star, AlertTriangle } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import type { MenuCategory, MenuItem, Allergen } from "@/lib/types"
@@ -41,6 +41,7 @@ export default function MenuEditorPage() {
     category: "",
     routing: "kitchen" as "kitchen" | "bar",
     out_of_stock: false,
+    stock_quantity: "",
     button_color: "",
     status: true,
     is_piatto_del_giorno: false,
@@ -54,6 +55,12 @@ export default function MenuEditorPage() {
       .trim()
 
   const isRhumArrangeName = (value?: string | null) => normalizeEditorValue(value) === "rhum arrange"
+  const parseEditorStockQuantity = (value: unknown): number | null => {
+    if (value === null || value === undefined || value === "") return null
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) return null
+    return Math.max(0, Math.floor(parsed))
+  }
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
@@ -120,6 +127,7 @@ export default function MenuEditorPage() {
           category: itemData.category,
           routing: itemData.routing,
           out_of_stock: itemData.out_of_stock,
+          stock_quantity: parseEditorStockQuantity((itemData as any).stock_quantity),
           button_color: itemData.button_color || null,
           status: itemData.status !== undefined ? itemData.status : true,
           is_piatto_del_giorno: (itemData as any).is_piatto_del_giorno || false,
@@ -150,6 +158,7 @@ export default function MenuEditorPage() {
           category: "",
           routing: "kitchen",
           out_of_stock: false,
+          stock_quantity: "",
           button_color: "",
           status: true,
           is_piatto_del_giorno: false,
@@ -360,7 +369,10 @@ export default function MenuEditorPage() {
   }
 
   const openEditItemDialog = async (item: MenuItem) => {
-    setEditingItem(item)
+    setEditingItem({
+      ...item,
+      stock_quantity: item.stock_quantity ?? undefined,
+    })
     // Load existing allergens for this item
     const itemAllergens = allergenMap[item.id] || []
     setItemAllergenIds(itemAllergens.map((a) => a.id))
@@ -483,75 +495,101 @@ export default function MenuEditorPage() {
             </CardHeader>
             <CardContent className="p-4 sm:p-6 pt-0">
               <div className="space-y-2">
-                {items.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`flex items-center justify-between p-2 sm:p-3 rounded gap-3 ${
-                      item.status === false
-                        ? "bg-slate-800/60 border border-slate-600 opacity-60"
-                        : item.out_of_stock
-                          ? "bg-red-900/30 border-2 border-red-700"
-                          : "bg-slate-700"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <div className="font-semibold text-white text-sm sm:text-base truncate">{item.name}</div>
-                        {item.status === false && (
-                          <Badge className="bg-slate-600 text-xs">Masqué</Badge>
-                        )}
-                        {item.is_piatto_del_giorno && (
-                          <Badge className="bg-amber-500 text-black text-xs flex items-center gap-1">
-                            <Star className="h-3 w-3 fill-current" />
-                            Suggestion
-                          </Badge>
-                        )}
-                        {item.out_of_stock && (
-                          <Badge className="bg-red-600 text-xs flex items-center gap-1">
-                            <AlertCircle className="h-3 w-3" />
-                            Rupture
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="text-xs sm:text-sm text-slate-400">
-                        {item.price.toFixed(2)} € • TVA {item.tax_rate}% • {item.routing === "kitchen" ? "Cuisine" : "Bar"}
-                      </div>
-                      {item.details && (
-                        <div className="text-xs text-slate-300 mt-0.5 italic">{item.details}</div>
-                      )}
-                      {allergenMap[item.id] && allergenMap[item.id].length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
-                          {allergenMap[item.id].map((a) => (
-                            <span key={a.id} className="text-xs bg-amber-900/40 text-amber-300 border border-amber-700/50 rounded px-1.5 py-0.5">
-                              {a.emoji} {a.name}
-                            </span>
-                          ))}
+                {items.map((item) => {
+                  const trackedStock = typeof item.stock_quantity === "number" ? item.stock_quantity : null
+                  const isAutoOutOfStock = trackedStock !== null && trackedStock <= 0
+                  const isOutOfStock = Boolean(item.out_of_stock || isAutoOutOfStock)
+
+                  return (
+                    <div
+                      key={item.id}
+                      className={`flex items-center justify-between p-2 sm:p-3 rounded gap-3 ${
+                        item.status === false
+                          ? "bg-slate-800/60 border border-slate-600 opacity-60"
+                          : isOutOfStock
+                            ? "bg-red-900/30 border-2 border-red-700"
+                            : "bg-slate-700"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <div className="font-semibold text-white text-sm sm:text-base truncate">{item.name}</div>
+                          {item.status === false && (
+                            <Badge className="bg-slate-600 text-xs">Masqué</Badge>
+                          )}
+                          {item.is_piatto_del_giorno && (
+                            <Badge className="bg-amber-500 text-black text-xs flex items-center gap-1">
+                              <Star className="h-3 w-3 fill-current" />
+                              Suggestion
+                            </Badge>
+                          )}
+                          {trackedStock !== null && (
+                            <Badge
+                              className={`text-xs ${
+                                trackedStock <= 0
+                                  ? "bg-red-700"
+                                  : trackedStock <= 3
+                                    ? "bg-orange-600"
+                                    : "bg-blue-600"
+                              }`}
+                            >
+                              {trackedStock} restant{trackedStock > 1 ? "s" : ""}
+                            </Badge>
+                          )}
+                          {isOutOfStock && (
+                            <Badge className="bg-red-600 text-xs flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" />
+                              Rupture
+                            </Badge>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="flex gap-1.5 sm:gap-2 flex-shrink-0">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => toggleOutOfStock(item.id, item.out_of_stock || false)}
-                        className={`${
-                          item.out_of_stock
-                            ? "bg-green-600 hover:bg-green-700 border-green-500 text-white"
-                            : "bg-orange-600 hover:bg-orange-700 border-orange-500 text-white"
-                        } px-3 py-1.5 text-xs sm:text-sm font-medium`}
-                      >
-                        {item.out_of_stock ? (
-                          <>
-                            <CheckCircle className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                            Remettre en stock
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
-                            Mettre en rupture
-                          </>
+                        <div className="text-xs sm:text-sm text-slate-400">
+                          {item.price.toFixed(2)} € • TVA {item.tax_rate}% • {item.routing === "kitchen" ? "Cuisine" : "Bar"}
+                        </div>
+                        {item.details && (
+                          <div className="text-xs text-slate-300 mt-0.5 italic">{item.details}</div>
                         )}
-                      </Button>
+                        {allergenMap[item.id] && allergenMap[item.id].length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {allergenMap[item.id].map((a) => (
+                              <span key={a.id} className="text-xs bg-amber-900/40 text-amber-300 border border-amber-700/50 rounded px-1.5 py-0.5">
+                                {a.emoji} {a.name}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5 sm:gap-2 flex-shrink-0">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isAutoOutOfStock}
+                          onClick={() => toggleOutOfStock(item.id, isOutOfStock)}
+                          className={`${
+                            isAutoOutOfStock
+                              ? "bg-slate-600 border-slate-500 text-slate-200 cursor-not-allowed opacity-60"
+                              : isOutOfStock
+                                ? "bg-green-600 hover:bg-green-700 border-green-500 text-white"
+                                : "bg-orange-600 hover:bg-orange-700 border-orange-500 text-white"
+                          } px-3 py-1.5 text-xs sm:text-sm font-medium`}
+                        >
+                          {isAutoOutOfStock ? (
+                            <>
+                              <AlertTriangle className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                              Stock épuisé
+                            </>
+                          ) : isOutOfStock ? (
+                            <>
+                              <CheckCircle className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                              Remettre en stock
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4 mr-1" />
+                              Mettre en rupture
+                            </>
+                          )}
+                        </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -581,9 +619,10 @@ export default function MenuEditorPage() {
                       >
                         <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
                       </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </CardContent>
           </Card>
@@ -764,6 +803,31 @@ export default function MenuEditorPage() {
                 <option value="false">En stock</option>
                 <option value="true">Rupture</option>
               </select>
+            </div>
+            <div>
+              <Label className="text-sm">Décompte auto (plats restants)</Label>
+              <Input
+                type="number"
+                min="0"
+                step="1"
+                value={editingItem ? (editingItem.stock_quantity ?? "") : newItem.stock_quantity}
+                onChange={(e) => {
+                  const rawValue = e.target.value
+                  if (editingItem) {
+                    setEditingItem({
+                      ...editingItem,
+                      stock_quantity: rawValue === "" ? undefined : Math.max(0, Math.floor(Number(rawValue) || 0)),
+                    })
+                    return
+                  }
+                  setNewItem({ ...newItem, stock_quantity: rawValue })
+                }}
+                placeholder="Laisser vide pour désactiver"
+                className="bg-slate-700 border-slate-600 text-sm"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Le stock se décrémente automatiquement quand la commande est envoyée.
+              </p>
             </div>
             {/* Suggestion du chef */}
             <div className="flex items-center justify-between p-3 bg-slate-700/50 rounded-md">

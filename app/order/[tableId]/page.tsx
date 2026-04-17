@@ -2438,7 +2438,8 @@ export default function OrderPage() {
                 {displayedItems.map((item) => {
               const cartItem = cart.find((c) => getCartItemMenuItemId(c) === item.id && c.status === "pending")
               const quantity = cartItem?.quantity || 0
-              const isOutOfStock = item.out_of_stock
+              const trackedStock = typeof item.stock_quantity === "number" ? item.stock_quantity : null
+              const isOutOfStock = Boolean(item.out_of_stock || (trackedStock !== null && trackedStock <= 0))
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
               const itemDetails = isRhumArrangeItem(item.name) ? "" : item.details?.trim()
               const spiritConfig = getSpiritSelectionConfig(item)
@@ -2474,6 +2475,15 @@ export default function OrderPage() {
                     <div className="text-xs sm:text-sm mb-2 text-slate-400">
                       {itemCardPrice.toFixed(2)} €
                     </div>
+                    {trackedStock !== null && (
+                      <div
+                        className={`text-[10px] sm:text-xs mb-2 font-medium ${
+                          trackedStock <= 0 ? "text-red-400" : trackedStock <= 3 ? "text-orange-300" : "text-sky-300"
+                        }`}
+                      >
+                        {trackedStock} restant{trackedStock > 1 ? "s" : ""}
+                      </div>
+                    )}
                     {isOutOfStock ? (
                       <div className="flex items-center justify-center gap-1 text-red-400">
                         <AlertCircle className="h-3 w-3 sm:h-4 sm:w-4" />
