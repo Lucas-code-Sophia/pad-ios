@@ -2111,20 +2111,6 @@ export default function OrderPage() {
     }
   }
 
-  
-  if (isLoading || loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-900">
-        <div className="text-white text-xl">Chargement...</div>
-      </div>
-    )
-  }
-
-  const handleBackClick = async () => {
-    // Plus besoin de sauvegarder : tous les articles sont déjà en base
-    router.push("/floor-plan")
-  }
-
   const pendingQuantityByMenuItemId = useMemo(() => {
     const quantities = new Map<string, number>()
     for (const item of cart) {
@@ -2139,6 +2125,20 @@ export default function OrderPage() {
   const menuItemNameById = useMemo(() => {
     return new Map(menuItems.map((item) => [item.id, item.name]))
   }, [menuItems])
+
+  
+  if (isLoading || loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-900">
+        <div className="text-white text-xl">Chargement...</div>
+      </div>
+    )
+  }
+
+  const handleBackClick = async () => {
+    // Plus besoin de sauvegarder : tous les articles sont déjà en base
+    router.push("/floor-plan")
+  }
 
   const normalizedSearchQuery = normalizeForSearch(menuSearchQuery)
   const hasSearchQuery = normalizedSearchQuery.length > 0
