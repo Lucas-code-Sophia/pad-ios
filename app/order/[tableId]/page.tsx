@@ -213,6 +213,7 @@ export default function OrderPage() {
   const [allergenMap, setAllergenMap] = useState<Record<string, Array<{ id: string; name: string; emoji: string }>>>({})
   const [sendFeedback, setSendFeedback] = useState<SendFeedback | null>(null)
   const sendFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const orderRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [swipedExistingItemId, setSwipedExistingItemId] = useState<string | null>(null)
   const existingItemTouchRef = useRef<{ itemId: string; startX: number } | null>(null)
 
@@ -588,6 +589,9 @@ export default function OrderPage() {
       if (sendFeedbackTimeoutRef.current) {
         clearTimeout(sendFeedbackTimeoutRef.current)
       }
+      if (orderRefreshTimeoutRef.current) {
+        clearTimeout(orderRefreshTimeoutRef.current)
+      }
     }
   }, [])
 
@@ -871,6 +875,16 @@ export default function OrderPage() {
     }
   }
 
+  const scheduleOrderRefresh = (delayMs = 220) => {
+    if (orderRefreshTimeoutRef.current) {
+      clearTimeout(orderRefreshTimeoutRef.current)
+    }
+    orderRefreshTimeoutRef.current = setTimeout(() => {
+      orderRefreshTimeoutRef.current = null
+      void fetchOrderData()
+    }, delayMs)
+  }
+
   const openTransferDialog = async () => {
     setTransferDialogOpen(true)
     setTransferLoading(true)
@@ -946,6 +960,7 @@ export default function OrderPage() {
         if (!response.ok) {
           throw new Error("Failed to update quantity")
         }
+        scheduleOrderRefresh()
         return
       }
 
@@ -978,6 +993,7 @@ export default function OrderPage() {
         if (!response.ok) {
           throw new Error("Failed to update existing item")
         }
+        scheduleOrderRefresh()
         return
       }
 
@@ -1018,7 +1034,9 @@ export default function OrderPage() {
         if (createdOrderId) {
           setLiveOrderId(createdOrderId)
         }
-        if (!currentOrder?.id) {
+        if (currentOrder?.id) {
+          scheduleOrderRefresh()
+        } else {
           void fetchOrderData()
         }
       } else {
@@ -1070,7 +1088,9 @@ export default function OrderPage() {
         if (createdOrderId) {
           setLiveOrderId(createdOrderId)
         }
-        if (!currentOrder?.id) {
+        if (currentOrder?.id) {
+          scheduleOrderRefresh()
+        } else {
           void fetchOrderData()
         }
       } else {
@@ -1400,6 +1420,7 @@ export default function OrderPage() {
       }
 
       setSwipedExistingItemId(null)
+      scheduleOrderRefresh()
     } catch (error) {
       console.error("[v0] Error deleting existing item:", error)
       alert("Impossible de supprimer cet article.")
@@ -1410,7 +1431,24 @@ export default function OrderPage() {
     // Trouver l'article dans le panier
     const item = cart.find((item) => item.cartItemId === cartItemId)
     if (!item) return
-    
+
+    // Réponse UI immédiate, puis resynchronisation arrière-plan.
+    setCart((prev) => {
+      const currentItem = prev.find((entry) => entry.cartItemId === cartItemId)
+      if (!currentItem) return prev
+      if (currentItem.quantity > 1) {
+        return prev.map((entry) =>
+          entry.cartItemId === cartItemId ? { ...entry, quantity: currentItem.quantity - 1 } : entry,
+        )
+      }
+      return prev.filter((entry) => entry.cartItemId !== cartItemId)
+    })
+
+    if (!activeOrderId) {
+      scheduleOrderRefresh(0)
+      return
+    }
+
     try {
       if (item.quantity > 1) {
         // Mettre à jour la quantité en utilisant l'API existante
@@ -1461,8 +1499,10 @@ export default function OrderPage() {
           throw new Error("Failed to remove item")
         }
       }
+      scheduleOrderRefresh()
     } catch (error) {
       console.error("[v0] Error removing item from cart:", error)
+      scheduleOrderRefresh(0)
     }
   }
 
@@ -1503,10 +1543,13 @@ export default function OrderPage() {
       })
       
       if (response.ok) {
-        // Plus besoin de fetchData() - Realtime gère la mise à jour
+        scheduleOrderRefresh()
+      } else {
+        throw new Error("Failed to toggle follow status")
       }
     } catch (error) {
       console.error("[v0] Error toggling to-follow status:", error)
+      scheduleOrderRefresh(0)
     }
   }
 
@@ -1544,10 +1587,13 @@ export default function OrderPage() {
         })
         
         if (response.ok) {
-          // Plus besoin de fetchData() - Realtime gère la mise à jour
+          scheduleOrderRefresh()
+        } else {
+          throw new Error("Failed to save notes")
         }
       } catch (error) {
         console.error("[v0] Error saving notes:", error)
+        scheduleOrderRefresh(0)
       }
     }
     setNotesDialog({ open: false, itemId: null })
@@ -1687,10 +1733,13 @@ export default function OrderPage() {
         })
         
         if (response.ok) {
-          // Plus besoin de fetchData() - Realtime gère la mise à jour
+          scheduleOrderRefresh()
+        } else {
+          throw new Error("Failed to save complimentary status")
         }
       } catch (error) {
         console.error("[v0] Error saving complimentary status:", error)
+        scheduleOrderRefresh(0)
       }
     } else if (complimentaryDialog.type === "supplement" && complimentaryDialog.itemId) {
       // Les suppléments ne sont pas persistés en BDD avant l'envoi: on reste en local
