@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useRef, type TouchEvent } from "react"
+import { useEffect, useMemo, useState, useRef, type TouchEvent } from "react"
 import { useRouter, useParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { Table, MenuCategory, MenuItem, Order, OrderItem } from "@/lib/types"
@@ -156,6 +156,7 @@ export default function OrderPage() {
   const [cart, setCart] = useState<CartItem[]>([])
   const [supplements, setSupplements] = useState<SupplementItem[]>([])
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null)
+  const [liveOrderId, setLiveOrderId] = useState<string | null>(null)
   const [existingItems, setExistingItems] = useState<OrderItem[]>([])
   const [loading, setLoading] = useState(true)
   const [notesDialog, setNotesDialog] = useState<{ open: boolean; itemId: string | null }>({
@@ -368,6 +369,7 @@ export default function OrderPage() {
   const verresOptions = [2, 3, 4, 5, 6, 7, 8]
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
   const getCartItemMenuItemId = (item: CartItem) => item.menuItem?.id || item.menuItemId
+  const activeOrderId = currentOrder?.id || liveOrderId || undefined
 
   const showSendFeedback = (feedback: SendFeedback) => {
     if (sendFeedbackTimeoutRef.current) {
@@ -620,23 +622,23 @@ export default function OrderPage() {
 
   // Realtime : écouter les changements sur order_items pour mise à jour instantanée
   useEffect(() => {
-    if (!currentOrder?.id) return
+    if (!liveOrderId) return
 
     const supabase = createClient()
     
     const channel = supabase
-      .channel(`order_${currentOrder.id}`)
+      .channel(`order_${liveOrderId}`)
       .on('postgres_changes', {
         event: '*', // INSERT, UPDATE, DELETE
         schema: 'public',
         table: 'order_items',
-        filter: `order_id=eq.${currentOrder.id}` // Seulement pour cette commande
+        filter: `order_id=eq.${liveOrderId}` // Seulement pour cette commande
       }, (payload) => {
         // Mapper le payload vers notre format CartItem
         const mapPayloadToCartItem = (item: any): CartItem => {
           const menuItem = menuItems.find((m: MenuItem) => m.id === item.menu_item_id)
           return {
-            id: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            id: item.id as string,
             cartItemId: item.id as string,
             menuItemId: item.menu_item_id as string,
             menuItem: menuItem || null,
@@ -653,20 +655,26 @@ export default function OrderPage() {
           // Ajouter le nouvel item au panier
           const newItem = mapPayloadToCartItem(payload.new)
           if (newItem.status !== 'fired' && newItem.status !== 'completed') {
-            setCart(prev => [...prev, newItem])
+            setCart((prev) => {
+              if (prev.some((item) => item.cartItemId === newItem.cartItemId)) {
+                return prev
+              }
+              return [...prev, newItem]
+            })
           }
         } else if (payload.eventType === 'UPDATE') {
           // Mettre à jour l'item existant
-          setCart(prev => prev.map(item => {
-            if (item.cartItemId === payload.new.id) {
-              const updatedItem = mapPayloadToCartItem(payload.new)
-              // Garder dans le panier seulement si pas fired/completed
-              return (updatedItem.status !== 'fired' && updatedItem.status !== 'completed')
-                ? updatedItem
-                : item
+          const updatedItem = mapPayloadToCartItem(payload.new)
+          setCart((prev) => {
+            if (updatedItem.status === "fired" || updatedItem.status === "completed") {
+              return prev.filter((item) => item.cartItemId !== updatedItem.cartItemId)
             }
-            return item
-          }))
+            const hasItem = prev.some((item) => item.cartItemId === updatedItem.cartItemId)
+            if (!hasItem) {
+              return [...prev, updatedItem]
+            }
+            return prev.map((item) => (item.cartItemId === updatedItem.cartItemId ? updatedItem : item))
+          })
         } else if (payload.eventType === 'DELETE') {
           // Supprimer l'item du panier
           setCart(prev => prev.filter(item => item.cartItemId !== payload.old.id))
@@ -678,7 +686,7 @@ export default function OrderPage() {
     return () => {
       supabase.removeChannel(channel)
     }
-  }, [currentOrder?.id, menuItems])
+  }, [liveOrderId, menuItems])
 
   const fetchCategories = async () => {
     const categoriesRes = await fetch("/api/menu/categories")
@@ -802,6 +810,7 @@ export default function OrderPage() {
           }
 
           setCurrentOrder(orderData.order)
+          setLiveOrderId(orderData.order.id)
 
           // Organiser les articles selon leur statut
           const pendingItems = orderData.items.filter((item: OrderItem) => item.status === "pending")
@@ -816,7 +825,7 @@ export default function OrderPage() {
               console.warn("[v0] MenuItem not found for item:", item.menu_item_id)
             }
             return {
-              id: `cart-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+              id: item.id,
               cartItemId: item.id, // Utiliser l'ID de la BDD comme référence unique
               menuItemId: item.menu_item_id,
               menuItem: menuItem || null,
@@ -851,6 +860,8 @@ export default function OrderPage() {
             totalInCart: pendingItems.length + toFollow1Items.length + toFollow2Items.length,
           })
         } else {
+          setCurrentOrder(null)
+          setLiveOrderId(null)
           // Pas de commande existante → ouvrir le dialog couverts
           setCoversDialogOpen(true)
         }
@@ -915,7 +926,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [
               {
                 cartItemId: sourceCartItem.cartItemId,
@@ -932,8 +943,8 @@ export default function OrderPage() {
           }),
         })
 
-        if (response.ok) {
-          await fetchOrderData()
+        if (!response.ok) {
+          throw new Error("Failed to update quantity")
         }
         return
       }
@@ -947,7 +958,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [
               {
                 cartItemId: existingPending.cartItemId,
@@ -964,8 +975,8 @@ export default function OrderPage() {
           }),
         })
 
-        if (response.ok) {
-          await fetchOrderData()
+        if (!response.ok) {
+          throw new Error("Failed to update existing item")
         }
         return
       }
@@ -985,7 +996,7 @@ export default function OrderPage() {
           },
         ],
         supplements: [],
-        orderId: currentOrder?.id,
+        orderId: activeOrderId,
       }
       // Envoyer le nombre de couverts à la création de la commande
       if (!currentOrder?.id && coversCount != null) {
@@ -999,7 +1010,19 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        await fetchOrderData()
+        const payload = await response.json().catch(() => null)
+        const createdOrderId =
+          payload && typeof payload === "object" && "orderId" in payload && typeof payload.orderId === "string"
+            ? payload.orderId
+            : null
+        if (createdOrderId) {
+          setLiveOrderId(createdOrderId)
+        }
+        if (!currentOrder?.id) {
+          void fetchOrderData()
+        }
+      } else {
+        throw new Error("Failed to add menu item")
       }
     } catch (error) {
       console.error("[v0] Error adding item to cart:", error)
@@ -1025,7 +1048,7 @@ export default function OrderPage() {
           complimentaryReason: "",
         })),
         supplements: [],
-        orderId: currentOrder?.id,
+        orderId: activeOrderId,
       }
       // Envoyer le nombre de couverts à la création de la commande
       if (!currentOrder?.id && coversCount != null) {
@@ -1039,7 +1062,19 @@ export default function OrderPage() {
       })
 
       if (response.ok) {
-        await fetchOrderData()
+        const payload = await response.json().catch(() => null)
+        const createdOrderId =
+          payload && typeof payload === "object" && "orderId" in payload && typeof payload.orderId === "string"
+            ? payload.orderId
+            : null
+        if (createdOrderId) {
+          setLiveOrderId(createdOrderId)
+        }
+        if (!currentOrder?.id) {
+          void fetchOrderData()
+        }
+      } else {
+        throw new Error("Failed to add items")
       }
     } catch (error) {
       console.error("[v0] Error adding items to order:", error)
@@ -1365,7 +1400,6 @@ export default function OrderPage() {
       }
 
       setSwipedExistingItemId(null)
-      await fetchOrderData()
     } catch (error) {
       console.error("[v0] Error deleting existing item:", error)
       alert("Impossible de supprimer cet article.")
@@ -1384,7 +1418,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [{
               cartItemId: cartItemId,
               menuItemId: getCartItemMenuItemId(item),
@@ -1399,8 +1433,8 @@ export default function OrderPage() {
           }),
         })
         
-        if (response.ok) {
-          await fetchOrderData()
+        if (!response.ok) {
+          throw new Error("Failed to decrease quantity")
         }
       } else {
         // Supprimer l'article
@@ -1408,7 +1442,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [{
               cartItemId: cartItemId,
               menuItemId: getCartItemMenuItemId(item),
@@ -1423,8 +1457,8 @@ export default function OrderPage() {
           }),
         })
         
-        if (response.ok) {
-          await fetchOrderData()
+        if (!response.ok) {
+          throw new Error("Failed to remove item")
         }
       }
     } catch (error) {
@@ -1453,7 +1487,7 @@ export default function OrderPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          orderId: currentOrder?.id,
+          orderId: activeOrderId,
           items: [{
             cartItemId: cartItemId,
             menuItemId: getCartItemMenuItemId(item),
@@ -1494,7 +1528,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [{
             cartItemId: notesDialog.itemId,
             menuItemId: getCartItemMenuItemId(item),
@@ -1637,7 +1671,7 @@ export default function OrderPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            orderId: currentOrder?.id,
+            orderId: activeOrderId,
             items: [{
               cartItemId: complimentaryDialog.itemId,
               menuItemId: getCartItemMenuItemId(item),
@@ -1762,7 +1796,7 @@ export default function OrderPage() {
         isComplimentary: sup.isComplimentary || false,
         complimentaryReason: sup.complimentaryReason,
       })),
-      orderId: currentOrder?.id,
+      orderId: activeOrderId,
     }
 
     const printSettings = await getConfiguredPrintSettings()
@@ -1969,7 +2003,7 @@ export default function OrderPage() {
         serverId: user?.id || "",
         items: allItemsForAPI,
         supplements: [],
-        orderId: currentOrder?.id,
+        orderId: activeOrderId,
       }
 
       const printSettings = await getConfiguredPrintSettings()
@@ -2090,6 +2124,21 @@ export default function OrderPage() {
     // Plus besoin de sauvegarder : tous les articles sont déjà en base
     router.push("/floor-plan")
   }
+
+  const pendingQuantityByMenuItemId = useMemo(() => {
+    const quantities = new Map<string, number>()
+    for (const item of cart) {
+      if (item.status !== "pending") continue
+      const menuItemId = getCartItemMenuItemId(item)
+      if (!menuItemId) continue
+      quantities.set(menuItemId, (quantities.get(menuItemId) || 0) + item.quantity)
+    }
+    return quantities
+  }, [cart])
+
+  const menuItemNameById = useMemo(() => {
+    return new Map(menuItems.map((item) => [item.id, item.name]))
+  }, [menuItems])
 
   const normalizedSearchQuery = normalizeForSearch(menuSearchQuery)
   const hasSearchQuery = normalizedSearchQuery.length > 0
@@ -2436,8 +2485,7 @@ export default function OrderPage() {
                 ))}
 
                 {displayedItems.map((item) => {
-              const cartItem = cart.find((c) => getCartItemMenuItemId(c) === item.id && c.status === "pending")
-              const quantity = cartItem?.quantity || 0
+              const quantity = pendingQuantityByMenuItemId.get(item.id) || 0
               const trackedStock = typeof item.stock_quantity === "number" ? item.stock_quantity : null
               const isOutOfStock = Boolean(item.out_of_stock || (trackedStock !== null && trackedStock <= 0))
               const colorClasses = !isOutOfStock ? getMenuButtonColorClasses(item.button_color) : ""
@@ -2563,7 +2611,7 @@ export default function OrderPage() {
                 <div className="space-y-2 max-h-32 sm:max-h-40 overflow-y-auto">
                   {existingItems.map((item) => {
                     const isSwiped = swipedExistingItemId === item.id
-                    const baseItemName = menuItems.find((m) => m.id === item.menu_item_id)?.name || "Article"
+                    const baseItemName = menuItemNameById.get(item.menu_item_id) || "Article"
                     const { displayName } = getItemDisplayInfo(baseItemName, item.notes)
                     return (
                       <div key={item.id} className="group relative overflow-hidden rounded">
@@ -2615,11 +2663,11 @@ export default function OrderPage() {
                 <p className="text-center text-slate-500 py-6 sm:py-8 text-sm">Panier vide</p>
               ) : (
                 <>
-                  {cart.map((item, index) => {
+                  {cart.map((item) => {
                     const { displayName, displayNote } = getItemDisplayInfo(item.menuItem?.name || "Article inconnu", item.notes)
                     return (
                     <div
-                      key={`${item.id}-${index}`}
+                      key={item.cartItemId}
                       className={`px-2 py-1.5 sm:p-2.5 rounded-lg ${item.isComplimentary ? "bg-green-900/20 border-2 border-green-700" : "bg-slate-900"}`}
                     >
                       <div className="flex items-center justify-between">
