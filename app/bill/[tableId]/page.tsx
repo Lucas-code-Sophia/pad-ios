@@ -42,17 +42,19 @@ type BillPaymentEntry = {
 const PAYMENT_STATE_KEY = "payment_state_"
 const roundCurrency = (value: number) => Math.round((Number(value) || 0) * 100) / 100
 
-type EmployeeDiscountBreakdown = {
+type BillDiscountBreakdown = {
   taxRate: 10 | 20
   amount: number
 }
 
-type EmployeeDiscountPayload = {
-  type: "employee_50"
+type BillDiscountType = "employee_50" | "seasonal_10"
+
+type BillDiscountPayload = {
+  type: BillDiscountType
   scope: "full" | "items"
   amount: number
   baseAmount: number
-  breakdown: EmployeeDiscountBreakdown[]
+  breakdown: BillDiscountBreakdown[]
 }
 
 type PaymentSplitMode = "full" | "equal" | "items" | "custom"
@@ -75,6 +77,15 @@ const isEmployeeDiscountSupplement = (supplement: Supplement) => {
   const normalizedNotes = normalizeBillText(supplement.notes || "")
   return normalizedName.includes("remise salarie -50") || normalizedNotes.includes("remise -50%")
 }
+
+const isSeasonalDiscountSupplement = (supplement: Supplement) => {
+  const normalizedName = normalizeBillText(supplement.name)
+  const normalizedNotes = normalizeBillText(supplement.notes || "")
+  return normalizedName.includes("remise saisonnier -10") || normalizedNotes.includes("remise -10% saisonnier")
+}
+
+const isKnownDiscountSupplement = (supplement: Supplement) =>
+  isEmployeeDiscountSupplement(supplement) || isSeasonalDiscountSupplement(supplement)
 
 export default function BillPage() {
   const { user, isLoading } = useAuth()
@@ -102,7 +113,7 @@ export default function BillPage() {
   const [swipedBillRowId, setSwipedBillRowId] = useState<string | null>(null)
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [customAmount, setCustomAmount] = useState("")
-  const [employeeDiscountActive, setEmployeeDiscountActive] = useState(false)
+  const [activeDiscountType, setActiveDiscountType] = useState<BillDiscountType | "none">("none")
   const [offerDialog, setOfferDialog] = useState<{
     open: boolean
     itemId: string | null
@@ -132,7 +143,7 @@ export default function BillPage() {
   const billRowTouchRef = useRef<{ rowId: string; startX: number } | null>(null)
   const billSwipeTriggeredAtRef = useRef(0)
   const canAccessBill = user?.role === "manager" || Boolean(user?.can_access_bill)
-  const canUseEmployeeDiscount = user?.role === "manager"
+  const canUseManagerDiscount = user?.role === "manager"
 
   const sanitizeIntegerInput = (value: string) => value.replace(/\D/g, "")
 
@@ -173,7 +184,15 @@ export default function BillPage() {
           setSplitCount(String(parseBoundedIntegerInput(String(parsed.splitCount ?? ""), 2, 20, 2)))
           setSelectedItemQuantities(new Map(Object.entries(parsed.selectedItemQuantities || {})))
           setCustomAmount(parsed.customAmount || "")
-          setEmployeeDiscountActive(Boolean(parsed.employeeDiscountActive))
+          const parsedDiscountType = String(parsed.activeDiscountType || "")
+          if (parsedDiscountType === "employee_50" || parsedDiscountType === "seasonal_10") {
+            setActiveDiscountType(parsedDiscountType)
+          } else if (Boolean(parsed.employeeDiscountActive)) {
+            // Backward compatibility with previous persisted payment state.
+            setActiveDiscountType("employee_50")
+          } else {
+            setActiveDiscountType("none")
+          }
         } catch (error) {
           console.error("[v0] Error loading payment state:", error)
         }
@@ -188,18 +207,18 @@ export default function BillPage() {
         splitCount: splitCountValue,
         selectedItemQuantities: Object.fromEntries(selectedItemQuantities),
         customAmount,
-        employeeDiscountActive,
+        activeDiscountType,
       }
       localStorage.setItem(PAYMENT_STATE_KEY + tableId, JSON.stringify(state))
     }
-  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, employeeDiscountActive, loading])
+  }, [tableId, splitMode, splitCount, selectedItemQuantities, customAmount, activeDiscountType, loading])
 
   useEffect(() => {
     const unsupportedMode = splitMode !== "full" && splitMode !== "items"
-    if (!canUseEmployeeDiscount || unsupportedMode) {
-      setEmployeeDiscountActive(false)
+    if (!canUseManagerDiscount || unsupportedMode) {
+      setActiveDiscountType("none")
     }
-  }, [canUseEmployeeDiscount, splitMode])
+  }, [canUseManagerDiscount, splitMode])
 
   useEffect(() => {
     setSelectedItemQuantities((prev) => {
@@ -348,14 +367,15 @@ export default function BillPage() {
     return roundCurrency(Math.max(0, amount))
   }
 
-  const buildEmployeeDiscountPayload = (baseAmountInput: number): EmployeeDiscountPayload | null => {
-    if (!employeeDiscountActive || !canUseEmployeeDiscount) return null
+  const buildDiscountPayload = (baseAmountInput: number): BillDiscountPayload | null => {
+    if (!canUseManagerDiscount || activeDiscountType === "none") return null
     if (splitMode !== "full" && splitMode !== "items") return null
 
     const baseAmount = roundCurrency(baseAmountInput)
     if (baseAmount <= 0) return null
 
-    const discountAmount = roundCurrency(baseAmount * 0.5)
+    const discountRate = activeDiscountType === "employee_50" ? 0.5 : 0.1
+    const discountAmount = roundCurrency(baseAmount * discountRate)
     if (discountAmount <= 0) return null
 
     const basisByTaxRate: Record<10 | 20, number> = { 10: 0, 20: 0 }
@@ -394,7 +414,7 @@ export default function BillPage() {
     }
 
     const basisTotal = basisByTaxRate[10] + basisByTaxRate[20]
-    let breakdown: EmployeeDiscountBreakdown[] = []
+    let breakdown: BillDiscountBreakdown[] = []
 
     if (basisTotal > 0) {
       if (basisByTaxRate[10] > 0 && basisByTaxRate[20] > 0) {
@@ -414,7 +434,7 @@ export default function BillPage() {
     }
 
     return {
-      type: "employee_50",
+      type: activeDiscountType,
       scope: splitMode,
       amount: discountAmount,
       baseAmount,
@@ -424,7 +444,7 @@ export default function BillPage() {
 
   const getSplitComputation = () => {
     const baseAmount = calculateBaseSplitAmount()
-    const discountPayload = buildEmployeeDiscountPayload(baseAmount)
+    const discountPayload = buildDiscountPayload(baseAmount)
     const discountAmount = roundCurrency(discountPayload?.amount || 0)
     const amount = roundCurrency(Math.max(0, baseAmount - discountAmount))
     return { baseAmount, discountAmount, amount, discountPayload }
@@ -596,7 +616,7 @@ export default function BillPage() {
         const result = await response.json()
         setPaymentDialog(false)
         setCustomAmount("")
-        setEmployeeDiscountActive(false)
+        setActiveDiscountType("none")
         setCashGiven("")
         setTipAmount("")
         setCardTipDraft("")
@@ -1128,18 +1148,24 @@ export default function BillPage() {
   const remainingAmount = calculateRemainingAmount()
   const splitComputation = getSplitComputation()
   const splitAmount = splitComputation.amount
-  const employeeDiscountAmount = splitComputation.discountAmount
-  const employeeDiscountScope = splitComputation.discountPayload?.scope || null
+  const discountAmount = splitComputation.discountAmount
+  const discountScope = splitComputation.discountPayload?.scope || null
+  const discountType = splitComputation.discountPayload?.type || null
+  const discountLabel =
+    discountType === "employee_50"
+      ? "Remise salarié -50%"
+      : discountType === "seasonal_10"
+        ? "Remise saisonnier -10%"
+        : "Remise"
   const cashGivenValue = Number.parseFloat(cashGiven) || 0
   const tipValue = Math.max(0, Number.parseFloat(tipAmount) || 0)
   const totalWithTip = splitAmount + tipValue
   const changeDue = paymentMethod === "cash" ? cashGivenValue - totalWithTip : 0
   const selectedItemsCount = Array.from(selectedItemQuantities.values()).reduce((sum, qty) => sum + qty, 0)
-  const employeeDiscountSupplements = supplements.filter((supplement) => isEmployeeDiscountSupplement(supplement))
-  const visibleSupplements = supplements.filter((supplement) => !isEmployeeDiscountSupplement(supplement))
-  const isEmployeeDiscountEligible = canUseEmployeeDiscount && (splitMode === "full" || splitMode === "items")
-  const disableEmployeeDiscountToggle =
-    !isEmployeeDiscountEligible || (splitMode === "items" && selectedItemsCount === 0)
+  const discountSupplements = supplements.filter((supplement) => isKnownDiscountSupplement(supplement))
+  const visibleSupplements = supplements.filter((supplement) => !isKnownDiscountSupplement(supplement))
+  const isDiscountEligible = canUseManagerDiscount && (splitMode === "full" || splitMode === "items")
+  const disableDiscountToggle = !isDiscountEligible || (splitMode === "items" && selectedItemsCount === 0)
   const disablePaymentActions = (splitMode === "items" && selectedItemsCount === 0) || splitAmount <= 0
   const complimentaryCount =
     items.filter((item) => item.is_complimentary).length + supplements.filter((sup) => sup.is_complimentary).length
@@ -1529,7 +1555,7 @@ export default function BillPage() {
                     </span>
                     <span className="text-base sm:text-lg font-semibold">-{paidAmount.toFixed(2)} €</span>
                   </div>
-                  {employeeDiscountSupplements.map((supplement) => (
+                  {discountSupplements.map((supplement) => (
                     <div key={supplement.id} className="flex justify-between items-center text-emerald-300">
                       <span className="text-xs sm:text-sm">
                         {supplement.name}
@@ -1637,32 +1663,47 @@ export default function BillPage() {
                 </div>
               )}
 
-              {canUseEmployeeDiscount && (
-                <div
-                  className={`p-2 sm:p-3 rounded border ${
-                    employeeDiscountActive ? "bg-emerald-900/20 border-emerald-600" : "bg-slate-900 border-slate-700"
-                  }`}
-                >
+              {canUseManagerDiscount && (
+                <div className="p-2 sm:p-3 rounded border bg-slate-900 border-slate-700">
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-white text-sm sm:text-base font-medium">-50% spécial salarié</p>
+                      <p className="text-white text-sm sm:text-base font-medium">Remises manager</p>
                       <p className="text-xs text-slate-400">
-                        Disponible uniquement pour manager, en addition complète ou par articles.
+                        Disponibles en addition complète ou par articles.
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      type="button"
-                      onClick={() => setEmployeeDiscountActive((prev) => !prev)}
-                      disabled={disableEmployeeDiscountToggle}
-                      className={
-                        employeeDiscountActive
-                          ? "bg-red-600 hover:bg-red-700 text-white"
-                          : "bg-slate-700 hover:bg-slate-600 text-white"
-                      }
-                    >
-                      {employeeDiscountActive ? "Désactiver" : "Activer"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        type="button"
+                        onClick={() =>
+                          setActiveDiscountType((prev) => (prev === "employee_50" ? "none" : "employee_50"))
+                        }
+                        disabled={disableDiscountToggle}
+                        className={
+                          activeDiscountType === "employee_50"
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                            : "bg-slate-700 hover:bg-slate-600 text-white"
+                        }
+                      >
+                        -50% salarié
+                      </Button>
+                      <Button
+                        size="sm"
+                        type="button"
+                        onClick={() =>
+                          setActiveDiscountType((prev) => (prev === "seasonal_10" ? "none" : "seasonal_10"))
+                        }
+                        disabled={disableDiscountToggle}
+                        className={
+                          activeDiscountType === "seasonal_10"
+                            ? "bg-amber-600 hover:bg-amber-700 text-white"
+                            : "bg-slate-700 hover:bg-slate-600 text-white"
+                        }
+                      >
+                        -10% saisonnier
+                      </Button>
+                    </div>
                   </div>
                   {splitMode === "equal" && (
                     <p className="text-xs text-amber-300 mt-2">
@@ -1687,10 +1728,10 @@ export default function BillPage() {
               <div className="text-center">
                 <p className="text-slate-400 text-xs sm:text-sm mb-1">Montant à régler</p>
                 <p className="text-3xl sm:text-4xl font-bold text-blue-400">{splitAmount.toFixed(2)} €</p>
-                {employeeDiscountAmount > 0 && (
+                {discountAmount > 0 && (
                   <p className="text-xs sm:text-sm text-emerald-300 mt-1">
-                    Remise salarié -50% ({employeeDiscountScope === "items" ? "articles sélectionnés" : "addition"}) : -
-                    {employeeDiscountAmount.toFixed(2)} €
+                    {discountLabel} ({discountScope === "items" ? "articles sélectionnés" : "addition"}) : -
+                    {discountAmount.toFixed(2)} €
                   </p>
                 )}
                 {splitMode === "equal" && (

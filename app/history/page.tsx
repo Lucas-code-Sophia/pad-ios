@@ -9,7 +9,7 @@ import type { EposTicket } from "@/lib/epos"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { ArrowLeft, Calendar, TrendingUp, Users, DollarSign, CreditCard, Banknote, Printer } from "lucide-react"
+import { ArrowLeft, Calendar, TrendingUp, Users, DollarSign, CreditCard, Banknote, Printer, BadgePercent } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
@@ -45,6 +45,8 @@ interface DailySalesData {
     orderCount: number
     averageTicket: number
     totalTax: number
+    seasonalDiscountAmount?: number
+    seasonalDiscountCount?: number
   }
   serverStats: ServerStats[]
 }
@@ -569,7 +571,7 @@ export default function HistoryPage() {
       </div>
 
       {isAdmin && (
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 sm:gap-4 mb-4 sm:mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
           <Card className="bg-slate-800 border-slate-700 p-4 sm:p-6">
             <div className="flex items-center gap-3">
               <div className="p-2 sm:p-3 bg-green-600/20 rounded-lg">
@@ -593,6 +595,24 @@ export default function HistoryPage() {
                 <p className="text-xs sm:text-sm text-slate-400">TVA collectée</p>
                 <p className="text-xl sm:text-2xl font-bold text-white">
                   {salesData?.statistics.totalTax.toFixed(2) || "0.00"} €
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="bg-slate-800 border-slate-700 p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-amber-600/20 rounded-lg">
+                <BadgePercent className="h-5 w-5 sm:h-6 sm:w-6 text-amber-400" />
+              </div>
+              <div>
+                <p className="text-xs sm:text-sm text-slate-400">Remises saisonniers</p>
+                <p className="text-xl sm:text-2xl font-bold text-white">
+                  {(salesData?.statistics.seasonalDiscountAmount || 0).toFixed(2)} €
+                </p>
+                <p className="text-xs text-amber-300">
+                  {salesData?.statistics.seasonalDiscountCount || 0} remise
+                  {(salesData?.statistics.seasonalDiscountCount || 0) > 1 ? "s" : ""}
                 </p>
               </div>
             </div>

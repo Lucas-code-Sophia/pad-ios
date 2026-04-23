@@ -252,18 +252,17 @@ export async function GET(request: NextRequest) {
 
     for (const sale of dailySales) {
       const orderId = String(sale.order_id || "")
-      if (!orderId) continue
-      const order = orderById.get(orderId)
+      const order = orderId ? orderById.get(orderId) : undefined
 
       const serverId = String(order?.server_id || sale.server_id || "unknown")
       const serverName = serverNameMap.get(serverId) || String(sale.server_name || "Inconnu")
       const tableId = String(order?.table_id || sale.table_id || "")
       const tableNumber = tableNumberMap.get(tableId) || String(sale.table_number || "?")
       const amount = toNumber(sale.total_amount)
-      const paymentBucket = paymentBucketsByOrder.get(orderId)
+      const paymentBucket = orderId ? paymentBucketsByOrder.get(orderId) : undefined
       const salePaymentMethod = String(sale.payment_method || "").toLowerCase()
       const paymentMethod: OrderPaymentMethod =
-        paymentMethodByOrder.get(orderId) ||
+        (orderId ? paymentMethodByOrder.get(orderId) : undefined) ||
         (salePaymentMethod === "mixed" ? "mixed" : normalizePaymentMethod(salePaymentMethod))
       const compAmount = toNumber(sale.complimentary_amount)
       const compCount = Math.round(toNumber(sale.complimentary_count))
@@ -384,20 +383,22 @@ export async function GET(request: NextRequest) {
       })
 
       // Dish tracking (sold items only, excludes complimentary).
-      const orderItems = orderItemsByOrder.get(orderId) || []
-      for (const item of orderItems) {
-        if (item.is_complimentary) continue
-        const mi = menuItemMap.get(item.menu_item_id)
-        if (!mi) continue
-        const quantity = toNumber(item.quantity)
-        if (quantity <= 0) continue
-        const lineTotal = quantity * toNumber(item.price)
-        const key = String(item.menu_item_id)
-        if (!dishCountMap[key]) {
-          dishCountMap[key] = { name: mi.name, quantity: 0, revenue: 0 }
+      if (orderId) {
+        const orderItems = orderItemsByOrder.get(orderId) || []
+        for (const item of orderItems) {
+          if (item.is_complimentary) continue
+          const mi = menuItemMap.get(item.menu_item_id)
+          if (!mi) continue
+          const quantity = toNumber(item.quantity)
+          if (quantity <= 0) continue
+          const lineTotal = quantity * toNumber(item.price)
+          const key = String(item.menu_item_id)
+          if (!dishCountMap[key]) {
+            dishCountMap[key] = { name: mi.name, quantity: 0, revenue: 0 }
+          }
+          dishCountMap[key].quantity += quantity
+          dishCountMap[key].revenue += lineTotal
         }
-        dishCountMap[key].quantity += quantity
-        dishCountMap[key].revenue += lineTotal
       }
     }
 

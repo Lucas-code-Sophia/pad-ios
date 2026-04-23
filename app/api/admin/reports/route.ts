@@ -12,6 +12,9 @@ export async function GET(request: NextRequest) {
     const period = searchParams.get("period") || "7days"
     const customStartDate = searchParams.get("startDate")
     const customEndDate = searchParams.get("endDate")
+    const todayDateParam = searchParams.get("todayDate")
+    const isIsoDate = (value: string | null) => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value))
+    const resolvedTodayDate = isIsoDate(todayDateParam) ? String(todayDateParam) : new Date().toISOString().split("T")[0]
 
     const supabase = await createClient()
     const PAGE_SIZE = 1000
@@ -70,8 +73,8 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const startDateStr = period === "today" ? new Date().toISOString().split("T")[0] : startDate.toISOString().split("T")[0]
-    const endDateStr = period === "today" ? new Date().toISOString().split("T")[0] : endDate.toISOString().split("T")[0]
+    const startDateStr = period === "today" ? resolvedTodayDate : startDate.toISOString().split("T")[0]
+    const endDateStr = period === "today" ? resolvedTodayDate : endDate.toISOString().split("T")[0]
     const effectiveStartDateStr = clampDateToRestaurantOpening(startDateStr)
 
     if (isBeforeRestaurantOpeningDate(endDateStr)) {

@@ -168,6 +168,9 @@ export default function OrderPage() {
   const [menuEnfantItem, setMenuEnfantItem] = useState<MenuItem | null>(null)
   const [menuEnfantChoice, setMenuEnfantChoice] = useState("")
   const [siropChoice, setSiropChoice] = useState("")
+  const [siropDialogOpen, setSiropDialogOpen] = useState(false)
+  const [siropItem, setSiropItem] = useState<MenuItem | null>(null)
+  const [siropDialogOptions, setSiropDialogOptions] = useState<string[]>([])
   const [cuissonDialogOpen, setCuissonDialogOpen] = useState(false)
   const [cuissonItem, setCuissonItem] = useState<MenuItem | null>(null)
   const [jusFruitDialogOpen, setJusFruitDialogOpen] = useState(false)
@@ -252,7 +255,15 @@ export default function OrderPage() {
       .toLowerCase()
       .trim()
   const menuEnfantOptions = ["Pâtes poulet", "Frites poulet"]
-  const siropOptions = ["Menthe", "Citron", "Pêche", "Grenadine"]
+  const siropOptions = [
+    "Fraise",
+    "Grenade",
+    "Grenadine",
+    "Menthe",
+    "Pêche",
+    "Citron",
+    "Orgeat",
+  ]
   const cuissonOptions = ["Bleu", "Saignant", "À point", "Bien cuit"]
   const jusFruitOptions = ["Orange", "Tomate", "Tomates", "Clémentine", "Fraise - Kiwi", "Ananas", "Pommes", "Abricots"]
   const defaultRhumArrangeOptions = ["Ananas", "Vanille", "Mangue", "Passion", "Coco", "Gingembre"]
@@ -337,6 +348,10 @@ export default function OrderPage() {
   const isJusArtisanalBioItem = (name: string) => normalizeForSearch(name) === "jus artisanal bio"
   const isRhumArrangeItem = (name: string) => normalizeForSearch(name).startsWith("rhum arrange")
   const isKirItem = (name: string) => /^kir\b/.test(normalizeForSearch(name))
+  const isSiropEauItem = (name: string) => {
+    const normalizedName = normalizeForSearch(name)
+    return normalizedName.includes("sirop") && normalizedName.includes("eau")
+  }
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
   const matchesSpiritBaseName = (name: string, type: SpiritSelectionType) => {
     const normalizedName = normalizeForSearch(name)
@@ -1189,6 +1204,21 @@ export default function OrderPage() {
     setKirOptions([])
   }
 
+  const openSiropDialog = (item: MenuItem) => {
+    const configuredOptions = parseChoiceOptions(item.details)
+    setSiropDialogOptions(configuredOptions.length > 1 ? configuredOptions : siropOptions)
+    setSiropItem(item)
+    setSiropDialogOpen(true)
+  }
+
+  const handleSiropSelect = async (flavor: string) => {
+    if (!siropItem) return
+    await addItemsToOrder([{ menuItem: siropItem, notes: `Goût: ${flavor}` }])
+    setSiropDialogOpen(false)
+    setSiropItem(null)
+    setSiropDialogOptions([])
+  }
+
   const openSpiritDialog = (item: MenuItem, config: SpiritDialogConfig) => {
     setSpiritDialogItem(item)
     setSpiritDialogConfig(config)
@@ -1348,6 +1378,10 @@ export default function OrderPage() {
     }
     if (isKirItem(item.name)) {
       openKirDialog(item)
+      return
+    }
+    if (isSiropEauItem(item.name)) {
+      openSiropDialog(item)
       return
     }
     const spiritConfig = getSpiritSelectionConfig(item)
@@ -3206,6 +3240,48 @@ export default function OrderPage() {
                 setKirDialogOpen(false)
                 setKirItem(null)
                 setKirOptions([])
+              }}
+              className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
+            >
+              Annuler
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sirop Dialog */}
+      <Dialog
+        open={siropDialogOpen}
+        onOpenChange={(open) => {
+          setSiropDialogOpen(open)
+          if (!open) {
+            setSiropItem(null)
+            setSiropDialogOptions([])
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>🥤 Choix du goût — {siropItem?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3 py-3">
+            {siropDialogOptions.map((option) => (
+              <Button
+                key={option}
+                onClick={() => handleSiropSelect(option)}
+                className="h-14 text-base font-semibold bg-slate-700 border border-slate-600 hover:bg-emerald-600 hover:border-emerald-500 transition-colors"
+              >
+                {option}
+              </Button>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSiropDialogOpen(false)
+                setSiropItem(null)
+                setSiropDialogOptions([])
               }}
               className="bg-slate-700 border-slate-600 text-slate-300 hover:bg-slate-600"
             >

@@ -128,6 +128,13 @@ interface ServiceSummaryData {
 }
 
 const TOP_DISHES_OPTIONS = [10, 20, 30, 50, 100] as const
+const BUSINESS_TIME_ZONE = "Europe/Paris"
+const getBusinessDateIso = () => new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TIME_ZONE }).format(new Date())
+const shiftIsoDate = (isoDate: string, days: number) => {
+  const [year, month, day] = isoDate.split("-").map((value) => Number.parseInt(value, 10))
+  if (!year || !month || !day) return isoDate
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().split("T")[0]
+}
 
 export default function ReportsPage() {
   const { user, isLoading } = useAuth()
@@ -145,7 +152,7 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true)
 
   // Service summary state
-  const [summaryDate, setSummaryDate] = useState(new Date().toISOString().split("T")[0])
+  const [summaryDate, setSummaryDate] = useState(getBusinessDateIso)
   const [summaryData, setSummaryData] = useState<ServiceSummaryData | null>(null)
   const [summaryLoading, setSummaryLoading] = useState(false)
   const [expandedServer, setExpandedServer] = useState<string | null>(null)
@@ -185,22 +192,16 @@ export default function ReportsPage() {
   }, [user, isLoading, router])
 
   useEffect(() => {
-    if (user?.role === "manager" && period !== "custom") {
-      fetchReports()
-    }
-  }, [user, period])
-
-  useEffect(() => {
-    if (user?.role === "manager" && period === "custom" && customStartDate && customEndDate) {
-      fetchReports()
-    }
-  }, [customStartDate, customEndDate])
-
-  useEffect(() => {
     if (user?.role === "manager" && activeTab === "service") {
       fetchServiceSummary()
     }
   }, [user, summaryDate, activeTab])
+
+  useEffect(() => {
+    if (user?.role !== "manager" || activeTab !== "overview") return
+    if (period === "custom" && (!customStartDate || !customEndDate)) return
+    fetchReports()
+  }, [user, activeTab, period, customStartDate, customEndDate])
 
   useEffect(() => {
     if (selectedTopDishId && !topDishes.some((dish) => dish.menu_item_id && dish.menu_item_id === selectedTopDishId)) {
@@ -227,6 +228,9 @@ export default function ReportsPage() {
     try {
       setLoading(true)
       let url = `/api/admin/reports?period=${period}`
+      if (period === "today") {
+        url += `&todayDate=${encodeURIComponent(getBusinessDateIso())}`
+      }
       if (period === "custom" && customStartDate && customEndDate) {
         url += `&startDate=${customStartDate}&endDate=${customEndDate}`
       }
@@ -973,11 +977,7 @@ export default function ReportsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      const d = new Date(summaryDate)
-                      d.setDate(d.getDate() - 1)
-                      setSummaryDate(d.toISOString().split("T")[0])
-                    }}
+                    onClick={() => setSummaryDate(shiftIsoDate(summaryDate, -1))}
                     className="bg-slate-700 border-slate-600 text-white"
                   >
                     ← Veille
@@ -985,7 +985,7 @@ export default function ReportsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setSummaryDate(new Date().toISOString().split("T")[0])}
+                    onClick={() => setSummaryDate(getBusinessDateIso())}
                     className="bg-emerald-700 border-emerald-600 text-white"
                   >
                     Aujourd'hui
@@ -993,11 +993,7 @@ export default function ReportsPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => {
-                      const d = new Date(summaryDate)
-                      d.setDate(d.getDate() + 1)
-                      setSummaryDate(d.toISOString().split("T")[0])
-                    }}
+                    onClick={() => setSummaryDate(shiftIsoDate(summaryDate, 1))}
                     className="bg-slate-700 border-slate-600 text-white"
                   >
                     Lendemain →

@@ -14,15 +14,19 @@ const toSupportedTaxRate = (value: unknown): 10 | 20 | null => {
   return null
 }
 
-type EmployeeDiscountBreakdown = {
+type BillDiscountBreakdown = {
   taxRate: 10 | 20
   amount: number
 }
 
-type EmployeeDiscountConfig = {
+type BillDiscountType = "employee_50" | "seasonal_10"
+
+type BillDiscountConfig = {
+  type: BillDiscountType
   scope: "full" | "items"
   amount: number
-  breakdown: EmployeeDiscountBreakdown[]
+  baseAmount: number
+  breakdown: BillDiscountBreakdown[]
 }
 
 export async function POST(request: NextRequest) {
@@ -41,9 +45,13 @@ export async function POST(request: NextRequest) {
     }
     const safeTipAmount = roundCurrency(Math.max(0, toNumber(tipAmount)))
 
-    let employeeDiscount: EmployeeDiscountConfig | null = null
+    let appliedDiscount: BillDiscountConfig | null = null
 
-    if (discount && typeof discount === "object" && discount.type === "employee_50") {
+    if (
+      discount &&
+      typeof discount === "object" &&
+      (discount.type === "employee_50" || discount.type === "seasonal_10")
+    ) {
       const { data: requester, error: requesterError } = await supabase
         .from("users")
         .select("role")
@@ -51,17 +59,28 @@ export async function POST(request: NextRequest) {
         .maybeSingle()
 
       if (requesterError || !requester || requester.role !== "manager") {
-        return NextResponse.json({ error: "Employee discount is manager-only" }, { status: 403 })
+        return NextResponse.json({ error: "Discount is manager-only" }, { status: 403 })
       }
 
+      const discountType: BillDiscountType = discount.type
       const discountAmount = roundCurrency(Math.max(0, toNumber(discount.amount)))
+      const baseAmount = roundCurrency(Math.max(0, toNumber(discount.baseAmount)))
       if (discountAmount <= 0) {
-        return NextResponse.json({ error: "Invalid employee discount amount" }, { status: 400 })
+        return NextResponse.json({ error: "Invalid discount amount" }, { status: 400 })
+      }
+      if (baseAmount <= 0) {
+        return NextResponse.json({ error: "Invalid discount base amount" }, { status: 400 })
       }
 
-      // -50% salarié => le montant encaissé doit correspondre au montant de remise.
-      if (Math.abs(discountAmount - paymentAmount) > 0.1) {
-        return NextResponse.json({ error: "Employee discount mismatch with payment amount" }, { status: 400 })
+      const expectedRate = discountType === "employee_50" ? 0.5 : 0.1
+      const expectedDiscountAmount = roundCurrency(baseAmount * expectedRate)
+      if (Math.abs(expectedDiscountAmount - discountAmount) > 0.1) {
+        return NextResponse.json({ error: "Discount amount mismatch with selected rate" }, { status: 400 })
+      }
+
+      const expectedPaymentAmount = roundCurrency(Math.max(0, baseAmount - discountAmount))
+      if (Math.abs(expectedPaymentAmount - paymentAmount) > 0.1) {
+        return NextResponse.json({ error: "Discount mismatch with payment amount" }, { status: 400 })
       }
 
       const scope: "full" | "items" = discount.scope === "items" ? "items" : "full"
@@ -74,7 +93,7 @@ export async function POST(request: NextRequest) {
           if (!taxRate || entryAmount <= 0) return null
           return { taxRate, amount: entryAmount }
         })
-        .filter(Boolean) as EmployeeDiscountBreakdown[]
+        .filter(Boolean) as BillDiscountBreakdown[]
 
       if (normalizedBreakdown.length === 0) {
         normalizedBreakdown = [{ taxRate: 10, amount: discountAmount }]
@@ -99,7 +118,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      employeeDiscount = { scope, amount: discountAmount, breakdown: normalizedBreakdown }
+      appliedDiscount = { type: discountType, scope, amount: discountAmount, baseAmount, breakdown: normalizedBreakdown }
     }
 
     const { data: paymentData, error: paymentError } = await supabase
@@ -110,7 +129,7 @@ export async function POST(request: NextRequest) {
         payment_method: paymentMethod,
         tip_amount: safeTipAmount,
         recorded_by: recordedBy,
-        metadata: { splitMode, itemQuantities, discount: employeeDiscount },
+        metadata: { splitMode, itemQuantities, discount: appliedDiscount },
       })
       .select()
       .single()
@@ -120,24 +139,31 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to record payment" }, { status: 500 })
     }
 
-    if (employeeDiscount) {
-      const discountSupplements = employeeDiscount.breakdown.map((row) => ({
+    if (appliedDiscount) {
+      const discountName = appliedDiscount.type === "employee_50" ? "Remise salarié -50 %" : "Remise saisonnier -10 %"
+      const discountNotes =
+        appliedDiscount.type === "employee_50"
+          ? appliedDiscount.scope === "items"
+            ? "Remise -50% sur les articles sélectionnés"
+            : "Remise -50% sur l'addition"
+          : appliedDiscount.scope === "items"
+            ? "Remise -10% saisonnier sur les articles sélectionnés"
+            : "Remise -10% saisonnier sur l'addition"
+
+      const discountSupplements = appliedDiscount.breakdown.map((row) => ({
         order_id: orderId,
-        name: "Remise salarié -50 %",
+        name: discountName,
         amount: -roundCurrency(row.amount),
         tax_rate: row.taxRate,
-        notes:
-          employeeDiscount.scope === "items"
-            ? "Remise -50% sur les articles sélectionnés"
-            : "Remise -50% sur l'addition",
+        notes: discountNotes,
         is_complimentary: false,
       }))
 
       const { error: discountError } = await supabase.from("supplements").insert(discountSupplements)
       if (discountError) {
-        console.error("[v0] Error applying employee discount:", discountError)
+        console.error("[v0] Error applying discount:", discountError)
         await supabase.from("payments").delete().eq("id", paymentData.id)
-        return NextResponse.json({ error: "Failed to apply employee discount" }, { status: 500 })
+        return NextResponse.json({ error: "Failed to apply discount" }, { status: 500 })
       }
     }
 

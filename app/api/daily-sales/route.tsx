@@ -6,6 +6,12 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const date = searchParams.get("date") || new Date().toISOString().split("T")[0]
+    const normalizeText = (value: unknown) =>
+      String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .trim()
 
     if (isBeforeRestaurantOpeningDate(date)) {
       return NextResponse.json({
@@ -16,6 +22,8 @@ export async function GET(request: NextRequest) {
           orderCount: 0,
           averageTicket: 0,
           totalTax: 0,
+          seasonalDiscountAmount: 0,
+          seasonalDiscountCount: 0,
         },
         serverStats: [],
       })
@@ -44,6 +52,9 @@ export async function GET(request: NextRequest) {
     const orderIds = (sales || []).map((sale: any) => sale.order_id).filter(Boolean)
     let totalTax = 0
 
+    let seasonalDiscountAmount = 0
+    let seasonalDiscountCount = 0
+
     if (orderIds.length > 0) {
       const { data: orderItems } = await supabase
         .from("order_items")
@@ -69,7 +80,7 @@ export async function GET(request: NextRequest) {
 
       const { data: supplements } = await supabase
         .from("supplements")
-        .select("order_id, amount, tax_rate, is_complimentary")
+        .select("order_id, amount, tax_rate, is_complimentary, name, notes")
         .in("order_id", orderIds)
 
       for (const sup of supplements || []) {
@@ -78,6 +89,15 @@ export async function GET(request: NextRequest) {
         const lineTotal = Number(sup.amount) || 0
         const lineTax = rate > 0 ? lineTotal - lineTotal / (1 + rate / 100) : 0
         totalTax += lineTax
+
+        const normalizedName = normalizeText((sup as any).name)
+        const normalizedNotes = normalizeText((sup as any).notes)
+        const isSeasonalDiscount =
+          normalizedName.includes("remise saisonnier -10") || normalizedNotes.includes("remise -10% saisonnier")
+        if (isSeasonalDiscount && lineTotal < 0) {
+          seasonalDiscountAmount += Math.abs(lineTotal)
+          seasonalDiscountCount += 1
+        }
       }
     }
 
@@ -112,6 +132,8 @@ export async function GET(request: NextRequest) {
         orderCount,
         averageTicket,
         totalTax,
+        seasonalDiscountAmount,
+        seasonalDiscountCount,
       },
       serverStats: Object.values(serverStats || {}),
     })
