@@ -213,9 +213,11 @@ export async function POST(request: NextRequest) {
       .eq("order_id", orderId)
 
     // Calculer les totaux
-    const itemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? 0 : toNumber(item.price) * toNumber(item.quantity)), 0) || 0
-    const supplementsTotal = supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? 0 : toNumber(sup.amount)), 0) || 0
-    const orderTotal = itemsTotal + supplementsTotal
+    const itemsTotal =
+      orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? 0 : toNumber(item.price) * toNumber(item.quantity)), 0) || 0
+    const supplementsTotal =
+      supplements?.reduce((sum, sup) => sum + (sup.is_complimentary ? 0 : toNumber(sup.amount)), 0) || 0
+    const orderTotal = roundCurrency(itemsTotal + supplementsTotal)
 
     // Calculer les articles offerts
     const complimentaryItemsTotal = orderItems?.reduce((sum, item) => sum + (item.is_complimentary ? toNumber(item.price) * toNumber(item.quantity) : 0), 0) || 0
@@ -226,8 +228,10 @@ export async function POST(request: NextRequest) {
     const totalComplimentaryAmount = complimentaryItemsTotal + complimentarySupplementsTotal
     const totalComplimentaryCount = complimentaryItemsCount + complimentarySupplementsCount
 
-    const paidTotal = payments?.reduce((sum, payment) => sum + Number.parseFloat(payment.amount.toString()), 0) || 0
-    const remainingAmount = orderTotal - paidTotal
+    const paidTotal = roundCurrency(
+      payments?.reduce((sum, payment) => sum + Number.parseFloat(payment.amount.toString()), 0) || 0,
+    )
+    const remainingAmount = roundCurrency(orderTotal - paidTotal)
 
     const isFullyPaid = remainingAmount <= 0.01 // Allow for small rounding errors
 

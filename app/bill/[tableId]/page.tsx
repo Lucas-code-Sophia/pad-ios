@@ -283,7 +283,9 @@ export default function BillPage() {
           const paidItemQuantities = new Map<string, number>()
           if (paymentsRes.ok) {
             const paymentsData = await paymentsRes.json()
-            const totalPaid = paymentsData.reduce((sum: number, p: any) => sum + Number.parseFloat(p.amount), 0)
+            const totalPaid = roundCurrency(
+              paymentsData.reduce((sum: number, p: any) => sum + Number.parseFloat(p.amount), 0),
+            )
             setPaidAmount(totalPaid)
             setPaymentsCount(paymentsData.length)
             setPayments(paymentsData)
@@ -334,11 +336,11 @@ export default function BillPage() {
       return sum + supPrice
     }, 0)
 
-    return itemsTotal + supplementsTotal
+    return roundCurrency(itemsTotal + supplementsTotal)
   }
 
   const calculateRemainingAmount = () => {
-    return Math.max(0, calculateTotal() - paidAmount)
+    return roundCurrency(Math.max(0, calculateTotal() - paidAmount))
   }
 
   const getSupportedTaxRate = (value: number): 10 | 20 | null => {
@@ -1163,6 +1165,10 @@ export default function BillPage() {
   const changeDue = paymentMethod === "cash" ? cashGivenValue - totalWithTip : 0
   const selectedItemsCount = Array.from(selectedItemQuantities.values()).reduce((sum, qty) => sum + qty, 0)
   const discountSupplements = supplements.filter((supplement) => isKnownDiscountSupplement(supplement))
+  const discountSupplementsTotal = discountSupplements.reduce(
+    (sum, supplement) => sum + Math.abs(Number(supplement.amount || 0)),
+    0,
+  )
   const visibleSupplements = supplements.filter((supplement) => !isKnownDiscountSupplement(supplement))
   const isDiscountEligible = canUseManagerDiscount && (splitMode === "full" || splitMode === "items")
   const disableDiscountToggle = !isDiscountEligible || (splitMode === "items" && selectedItemsCount === 0)
@@ -1547,6 +1553,12 @@ export default function BillPage() {
                 <span className="text-base sm:text-lg font-semibold text-white">Total</span>
                 <span className="text-xl sm:text-2xl font-bold text-white">{total.toFixed(2)} €</span>
               </div>
+              {discountSupplementsTotal > 0 && (
+                <div className="flex justify-between items-center text-emerald-300">
+                  <span className="text-xs sm:text-sm">Remises déjà incluses dans le total</span>
+                  <span className="text-base sm:text-lg font-semibold">-{discountSupplementsTotal.toFixed(2)} €</span>
+                </div>
+              )}
               {paidAmount > 0 && (
                 <>
                   <div className="flex justify-between items-center text-green-400">
@@ -1555,17 +1567,6 @@ export default function BillPage() {
                     </span>
                     <span className="text-base sm:text-lg font-semibold">-{paidAmount.toFixed(2)} €</span>
                   </div>
-                  {discountSupplements.map((supplement) => (
-                    <div key={supplement.id} className="flex justify-between items-center text-emerald-300">
-                      <span className="text-xs sm:text-sm">
-                        {supplement.name}
-                        {supplement.notes ? ` (${supplement.notes})` : ""}
-                      </span>
-                      <span className="text-base sm:text-lg font-semibold">
-                        -{Math.abs(Number(supplement.amount || 0)).toFixed(2)} €
-                      </span>
-                    </div>
-                  ))}
                   <div className="flex justify-between items-center pt-2 border-t border-slate-600">
                     <span className="text-lg sm:text-xl font-bold text-blue-400">Reste à payer</span>
                     <span className="text-2xl sm:text-3xl font-bold text-blue-400">{remainingAmount.toFixed(2)} €</span>
