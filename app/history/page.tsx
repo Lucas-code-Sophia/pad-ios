@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import type { DailySalesRecord } from "@/lib/types"
+import { printTicketWithConfiguredMode } from "@/lib/print-client"
+import type { EposTicket } from "@/lib/epos"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -12,10 +14,12 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import {
+  buildReceiptPrintLines,
   buildReceiptTicketHtml,
   buildTicketPaymentRows,
   formatTicketDateTime,
   type TicketItemRow,
+  type TicketPrintLine,
   type TicketTaxRow,
 } from "@/lib/ticket-layout"
 import { getItemDisplayInfo } from "@/lib/item-display"
@@ -119,6 +123,8 @@ export default function HistoryPage() {
   const [mealTicketTotal, setMealTicketTotal] = useState("")
   const [mealTicketIncludeTax, setMealTicketIncludeTax] = useState(true)
   const [mealTicketTaxRate, setMealTicketTaxRate] = useState<10 | 20>(10)
+  const [printingBillTicket, setPrintingBillTicket] = useState(false)
+  const [printingMealTicket, setPrintingMealTicket] = useState(false)
 
   useEffect(() => {
     if (isLoading) return
@@ -179,48 +185,6 @@ export default function HistoryPage() {
 
   const formatCurrency = (value: number) => `${Number(value || 0).toFixed(2)} €`
 
-  const openPrintWindow = (html: string) => {
-    if (typeof document === "undefined") return
-
-    const iframe = document.createElement("iframe")
-    iframe.setAttribute("aria-hidden", "true")
-    iframe.style.position = "fixed"
-    iframe.style.right = "0"
-    iframe.style.bottom = "0"
-    iframe.style.width = "0"
-    iframe.style.height = "0"
-    iframe.style.border = "0"
-    iframe.style.opacity = "0"
-    iframe.style.pointerEvents = "none"
-
-    const cleanup = () => {
-      window.setTimeout(() => {
-        iframe.remove()
-      }, 500)
-    }
-
-    iframe.onload = () => {
-      const printFrameWindow = iframe.contentWindow
-      if (!printFrameWindow) {
-        cleanup()
-        alert("Impossible de lancer l'impression.")
-        return
-      }
-
-      try {
-        printFrameWindow.focus()
-        printFrameWindow.print()
-      } catch (error) {
-        alert("Impossible de lancer l'impression.")
-      } finally {
-        cleanup()
-      }
-    }
-
-    iframe.srcdoc = html
-    document.body.appendChild(iframe)
-  }
-
   const getTicketContext = () => {
     const sale = transactionDetail?.sale || selectedTransaction
     const tableNumber = sale?.table_number || "-"
@@ -244,6 +208,38 @@ export default function HistoryPage() {
       tr: transactionDetail?.paymentBreakdown.other || 0,
       renderedChange: 0,
     })
+
+  type ReceiptPrintLine = TicketPrintLine
+
+  const buildEposTicketFromLines = (title: string, lines: ReceiptPrintLine[]): EposTicket => ({
+    title,
+    lines: lines.map((line) => ({
+      content: line.content,
+      align: line.align || "left",
+      fontScale: line.fontScale,
+      font: line.font || "font_b",
+    })),
+    cut: true,
+    beep: true,
+  })
+
+  const printCaisseTicket = async (ticket: EposTicket, setPrinting: (value: boolean) => void) => {
+    setPrinting(true)
+    try {
+      const result = await printTicketWithConfiguredMode({
+        kind: "caisse",
+        ticket,
+      })
+      if (!result.ok) {
+        alert(result.message || "Échec de l'impression")
+      }
+    } catch (error) {
+      console.error("[v0] Error printing history caisse ticket:", error)
+      alert("Échec de l'impression")
+    } finally {
+      setPrinting(false)
+    }
+  }
 
   const getTransactionTaxRows = (): TicketTaxRow[] => {
     if (!transactionDetail) {
@@ -337,6 +333,65 @@ export default function HistoryPage() {
     })
   }
 
+  const buildHistoryBillTicketPrintLines = (): ReceiptPrintLine[] => {
+    if (!transactionDetail) return []
+    const context = getTicketContext()
+    const total = Number(transactionDetail.sale.total_amount || 0)
+    const taxRows = getTransactionTaxRows()
+    const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
+    const remaining = Math.max(0, total - alreadyPaid)
+    const coversCount = Math.max(1, mealTicketMealsCount || 1)
+    const perPerson = remaining / coversCount
+    const discountsIncluded =
+      transactionDetail.items.reduce((sum, item) => {
+        if (!item.is_complimentary) return sum
+        return sum + Number(item.price || 0) * Number(item.quantity || 0)
+      }, 0) +
+      transactionDetail.supplements.reduce((sum, supplement) => {
+        if (!supplement.is_complimentary) return sum
+        return sum + Number(supplement.amount || 0)
+      }, 0)
+
+    const rows: TicketItemRow[] = [
+      ...transactionDetail.items.map((item) => {
+        const { displayName, displayNote } = getItemDisplayInfo(item.menu_name, item.notes)
+        return {
+          label: `${item.quantity} ${displayName}`,
+          amount: item.is_complimentary ? 0 : Number(item.line_total || 0),
+          complimentary: item.is_complimentary,
+          note: displayNote,
+          flag: getToFollowLabel(item.status),
+        }
+      }),
+      ...transactionDetail.supplements.map((supplement) => ({
+        label: `+ 1 ${supplement.name}`,
+        amount: supplement.is_complimentary ? 0 : Number(supplement.amount || 0),
+        complimentary: supplement.is_complimentary,
+        note: supplement.notes || undefined,
+      })),
+    ]
+
+    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const paymentRows = getTransactionPaymentRows()
+
+    return buildReceiptPrintLines({
+      documentTitle: `Réimpression addition - Table ${transactionDetail.sale.table_number || "-"}`,
+      metaDate: context.saleDate,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: rows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
+  }
+
   const buildHistoryMealTicketHtml = () => {
     if (!transactionDetail) return ""
     const context = getTicketContext()
@@ -374,6 +429,43 @@ export default function HistoryPage() {
     })
   }
 
+  const buildHistoryMealTicketPrintLines = (): ReceiptPrintLine[] => {
+    if (!transactionDetail) return []
+    const context = getTicketContext()
+    const total = Math.max(0, Number.parseFloat(mealTicketTotal) || 0)
+    const rate = Number(mealTicketTaxRate)
+    const taxAmount = mealTicketIncludeTax && rate > 0 ? total - total / (1 + rate / 100) : 0
+    const subtotal = mealTicketIncludeTax ? Math.max(0, total - taxAmount) : total
+    const mealsCount = Math.max(1, mealTicketMealsCount || 1)
+    const alreadyPaid = Math.min(Number(transactionDetail.paymentBreakdown.total || 0), total)
+    const remaining = Math.max(0, total - alreadyPaid)
+    const perPerson = remaining / mealsCount
+    const taxRows: TicketTaxRow[] = [
+      { rate: 10, ht: rate === 10 ? subtotal : 0, tva: rate === 10 ? taxAmount : 0, ttc: rate === 10 ? total : 0 },
+      { rate: 20, ht: rate === 20 ? subtotal : 0, tva: rate === 20 ? taxAmount : 0, ttc: rate === 20 ? total : 0 },
+    ]
+    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const rows: TicketItemRow[] = [{ label: `${mealsCount} Ticket repas`, amount: total }]
+    const paymentRows = getTransactionPaymentRows()
+
+    return buildReceiptPrintLines({
+      documentTitle: `Réimpression ticket repas - Table ${transactionDetail?.sale.table_number || "-"}`,
+      metaDate: context.saleDate,
+      serviceLine: context.serviceLine,
+      tableLine: `Table ${context.tableNumber}`,
+      items: rows,
+      perPersonAmount: perPerson,
+      totalTtc: total,
+      discountsIncluded: 0,
+      alreadyPaid,
+      dueAmount: remaining,
+      taxRows,
+      payments: paymentRows,
+      ticketRef,
+      printedAt: context.nowLabel,
+    })
+  }
+
   const openMealTicketPreview = () => {
     if (!transactionDetail) return
     setMealTicketMealsCount(3)
@@ -386,6 +478,18 @@ export default function HistoryPage() {
   const openBillTicketPreview = () => {
     if (!transactionDetail) return
     setBillTicketDialogOpen(true)
+  }
+
+  const handlePrintHistoryBillTicket = () => {
+    const lines = buildHistoryBillTicketPrintLines()
+    if (lines.length === 0) return
+    printCaisseTicket(buildEposTicketFromLines("CAISSE", lines), setPrintingBillTicket)
+  }
+
+  const handlePrintHistoryMealTicket = () => {
+    const lines = buildHistoryMealTicketPrintLines()
+    if (lines.length === 0) return
+    printCaisseTicket(buildEposTicketFromLines("TICKET REPAS", lines), setPrintingMealTicket)
   }
 
   if (isLoading || (user?.role === "manager" && loading)) {
@@ -926,12 +1030,12 @@ export default function HistoryPage() {
               </div>
 
               <Button
-                onClick={() => openPrintWindow(buildHistoryMealTicketHtml())}
+                onClick={handlePrintHistoryMealTicket}
                 className="w-full bg-blue-600 hover:bg-blue-700"
-                disabled={(Number.parseFloat(mealTicketTotal) || 0) <= 0}
+                disabled={(Number.parseFloat(mealTicketTotal) || 0) <= 0 || printingMealTicket}
               >
                 <Printer className="h-4 w-4 mr-2" />
-                Imprimer le ticket repas
+                {printingMealTicket ? "Impression en cours..." : "Imprimer le ticket repas"}
               </Button>
             </div>
 
@@ -954,11 +1058,12 @@ export default function HistoryPage() {
             <div className="space-y-4">
               <p className="text-sm text-slate-300">Cet aperçu correspond au ticket addition de la transaction sélectionnée.</p>
               <Button
-                onClick={() => openPrintWindow(buildHistoryBillTicketHtml())}
+                onClick={handlePrintHistoryBillTicket}
                 className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={printingBillTicket}
               >
                 <Printer className="h-4 w-4 mr-2" />
-                Imprimer le ticket addition
+                {printingBillTicket ? "Impression en cours..." : "Imprimer le ticket addition"}
               </Button>
             </div>
           </div>
