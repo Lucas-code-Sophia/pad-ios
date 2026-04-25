@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { RESTAURANT_OPENING_DATE, isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
+import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
 
 export async function GET() {
   try {
     const supabase = await createClient()
 
-    const today = new Date().toISOString().split("T")[0]
+    const today = getBusinessDateIso()
 
     if (isBeforeRestaurantOpeningDate(today)) {
       return NextResponse.json({
@@ -19,12 +20,21 @@ export async function GET() {
       })
     }
 
-    const { data: dailySales, error: dailyError } = await supabase
+    const windowStartIso = `${shiftIsoDate(today, -1)}T00:00:00.000Z`
+    const windowEndIso = `${shiftIsoDate(today, 1)}T23:59:59.999Z`
+
+    const { data: salesWindow, error: dailyError } = await supabase
       .from("daily_sales")
       .select("*")
-      .eq("date", today)
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
       .gte("date", RESTAURANT_OPENING_DATE)
     if (dailyError) throw dailyError
+
+    const dailySales = (salesWindow || []).filter((sale: any) => {
+      const saleBusinessDate = sale?.created_at ? getBusinessDateIso(sale.created_at) : String(sale?.date || "")
+      return saleBusinessDate === today
+    })
 
     const totalSales = dailySales?.reduce((sum, record) => sum + Number.parseFloat(record.total_amount), 0) || 0
     const orderCount = dailySales?.length || 0

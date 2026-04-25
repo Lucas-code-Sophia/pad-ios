@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
+import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
 
 type PaymentBucketMethod = "cash" | "card" | "other"
 type OrderPaymentMethod = PaymentBucketMethod | "mixed"
@@ -68,8 +69,19 @@ export async function GET(request: NextRequest) {
     const supabase = await createClient()
 
     // Daily sales is the accounting source for this screen.
-    const { data: dailySalesData } = await supabase.from("daily_sales").select("*").eq("date", date)
-    const dailySales = (dailySalesData || []) as DailySaleRow[]
+    // Use payment timestamp in business timezone for day selection.
+    const windowStartIso = `${shiftIsoDate(date, -1)}T00:00:00.000Z`
+    const windowEndIso = `${shiftIsoDate(date, 1)}T23:59:59.999Z`
+    const { data: dailySalesData } = await supabase
+      .from("daily_sales")
+      .select("*")
+      .gte("created_at", windowStartIso)
+      .lte("created_at", windowEndIso)
+
+    const dailySales = ((dailySalesData || []) as DailySaleRow[]).filter((sale) => {
+      const saleBusinessDate = sale.created_at ? getBusinessDateIso(sale.created_at) : ""
+      return saleBusinessDate === date
+    })
 
     if (dailySales.length === 0) {
       return NextResponse.json({

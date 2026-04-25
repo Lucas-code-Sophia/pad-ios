@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
+import { getBusinessDateIso } from "@/lib/business-date"
 
 const toNumber = (value: unknown) => {
   const parsed = Number(value)
@@ -35,8 +36,20 @@ export async function POST(request: NextRequest) {
       await request.json()
     const supabase = await createServerClient()
 
+    if (!orderId || typeof orderId !== "string") {
+      return NextResponse.json({ error: "Missing orderId" }, { status: 400 })
+    }
+    if (!tableId || typeof tableId !== "string") {
+      return NextResponse.json({ error: "Missing tableId" }, { status: 400 })
+    }
+
     if (!recordedBy) {
       return NextResponse.json({ error: "Missing recordedBy" }, { status: 400 })
+    }
+
+    const normalizedPaymentMethod = String(paymentMethod || "").toLowerCase()
+    if (!["cash", "card", "other"].includes(normalizedPaymentMethod)) {
+      return NextResponse.json({ error: "Invalid payment method" }, { status: 400 })
     }
 
     const paymentAmount = roundCurrency(toNumber(amount))
@@ -44,6 +57,23 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payment amount" }, { status: 400 })
     }
     const safeTipAmount = roundCurrency(Math.max(0, toNumber(tipAmount)))
+
+    const { data: orderStatusRow, error: orderStatusError } = await supabase
+      .from("orders")
+      .select("id, status")
+      .eq("id", orderId)
+      .maybeSingle()
+
+    if (orderStatusError) {
+      console.error("[v0] Error checking order status:", orderStatusError)
+      return NextResponse.json({ error: "Failed to verify order status" }, { status: 500 })
+    }
+    if (!orderStatusRow) {
+      return NextResponse.json({ error: "Order not found" }, { status: 404 })
+    }
+    if (orderStatusRow.status === "closed") {
+      return NextResponse.json({ error: "Order is already closed" }, { status: 409 })
+    }
 
     let appliedDiscount: BillDiscountConfig | null = null
 
@@ -126,7 +156,7 @@ export async function POST(request: NextRequest) {
       .insert({
         order_id: orderId,
         amount: paymentAmount,
-        payment_method: paymentMethod,
+        payment_method: normalizedPaymentMethod,
         tip_amount: safeTipAmount,
         recorded_by: recordedBy,
         metadata: { splitMode, itemQuantities, discount: appliedDiscount },
@@ -253,7 +283,7 @@ export async function POST(request: NextRequest) {
         ? normalizedPaymentMethods[0]
         : normalizedPaymentMethods.length > 1
           ? "mixed"
-          : paymentMethod
+          : normalizedPaymentMethod
 
     if (isFullyPaid) {
       await supabase.from("orders").update({ status: "closed", closed_at: new Date().toISOString() }).eq("id", orderId)
@@ -268,10 +298,10 @@ export async function POST(request: NextRequest) {
       // Utiliser le nom de la personne qui a ouvert la table si disponible, sinon le serveur de la commande
       const { data: serverData } = await supabase.from("users").select("name").eq("id", tableData?.opened_by || orderData?.server_id).single()
 
-      // Use the order creation date for sales records
-      const saleDate = orderData?.created_at ? new Date(orderData.created_at).toISOString().split("T")[0] : new Date().toISOString().split("T")[0]
+      // Accounting date must follow the final payment timestamp, not the order opening timestamp.
+      const saleDate = getBusinessDateIso(paymentData?.created_at || new Date())
 
-      await supabase.from("daily_sales").insert({
+      const { error: dailySaleInsertError } = await supabase.from("daily_sales").insert({
         date: saleDate,
         table_id: tableId,
         table_number: tableData?.table_number || "",
@@ -283,6 +313,18 @@ export async function POST(request: NextRequest) {
         complimentary_count: totalComplimentaryCount,
         payment_method: salePaymentMethod,
       })
+
+      if (dailySaleInsertError) {
+        console.error("[v0] Error recording daily sale:", dailySaleInsertError)
+        const { error: rollbackPaymentError } = await supabase.from("payments").delete().eq("id", paymentData.id)
+        if (rollbackPaymentError) {
+          console.error("[v0] Error rolling back payment after daily sale failure:", rollbackPaymentError)
+        }
+        if (dailySaleInsertError.code === "23505") {
+          return NextResponse.json({ error: "Order sale already recorded" }, { status: 409 })
+        }
+        return NextResponse.json({ error: "Failed to finalize payment" }, { status: 500 })
+      }
     }
 
     return NextResponse.json({

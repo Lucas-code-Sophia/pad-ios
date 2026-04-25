@@ -5,6 +5,7 @@ import {
   clampDateToRestaurantOpening,
   isBeforeRestaurantOpeningDate,
 } from "@/lib/restaurant-opening"
+import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
 
 export async function GET(request: NextRequest) {
   try {
@@ -14,7 +15,7 @@ export async function GET(request: NextRequest) {
     const customEndDate = searchParams.get("endDate")
     const todayDateParam = searchParams.get("todayDate")
     const isIsoDate = (value: string | null) => Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value))
-    const resolvedTodayDate = isIsoDate(todayDateParam) ? String(todayDateParam) : new Date().toISOString().split("T")[0]
+    const resolvedTodayDate = isIsoDate(todayDateParam) ? String(todayDateParam) : getBusinessDateIso()
 
     const supabase = await createClient()
     const PAGE_SIZE = 1000
@@ -116,15 +117,28 @@ export async function GET(request: NextRequest) {
     // Fetch daily sales data (paginated to avoid default row limits)
     const dailySales: any[] = []
     let salesOffset = 0
+    const todayWindowStartIso = `${shiftIsoDate(resolvedTodayDate, -1)}T00:00:00.000Z`
+    const todayWindowEndIso = `${shiftIsoDate(resolvedTodayDate, 1)}T23:59:59.999Z`
     while (true) {
-      const { data: salesPage, error: salesPageError } = await supabase
-        .from("daily_sales")
-        .select("*")
-        .gte("date", effectiveStartDateStr)
-        .lte("date", endDateStr)
-        .order("date", { ascending: true })
-        .order("created_at", { ascending: true })
-        .range(salesOffset, salesOffset + PAGE_SIZE - 1)
+      const salesPageQuery =
+        period === "today"
+          ? supabase
+              .from("daily_sales")
+              .select("*")
+              .gte("created_at", todayWindowStartIso)
+              .lte("created_at", todayWindowEndIso)
+              .order("created_at", { ascending: true })
+              .range(salesOffset, salesOffset + PAGE_SIZE - 1)
+          : supabase
+              .from("daily_sales")
+              .select("*")
+              .gte("date", effectiveStartDateStr)
+              .lte("date", endDateStr)
+              .order("date", { ascending: true })
+              .order("created_at", { ascending: true })
+              .range(salesOffset, salesOffset + PAGE_SIZE - 1)
+
+      const { data: salesPage, error: salesPageError } = await salesPageQuery
 
       if (salesPageError) throw salesPageError
       if (!salesPage || salesPage.length === 0) break
@@ -132,6 +146,15 @@ export async function GET(request: NextRequest) {
       dailySales.push(...salesPage)
       if (salesPage.length < PAGE_SIZE) break
       salesOffset += PAGE_SIZE
+    }
+
+    if (period === "today") {
+      const filteredSales = dailySales.filter((sale: any) => {
+        const saleBusinessDate = sale?.created_at ? getBusinessDateIso(sale.created_at) : String(sale?.date || "")
+        return saleBusinessDate === resolvedTodayDate
+      })
+      dailySales.length = 0
+      dailySales.push(...filteredSales)
     }
 
     // Group by date for chart
