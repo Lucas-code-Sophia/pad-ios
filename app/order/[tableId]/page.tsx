@@ -52,6 +52,16 @@ interface SupplementItem {
   complimentaryReason?: string
 }
 
+interface MergeTableOption {
+  id: string
+  table_number: string
+  status: "available" | "occupied" | "reserved"
+  seats: number
+  openOrderId: string | null
+  covers: number | null
+  hasPayments: boolean
+}
+
 interface CustomMenuItemFormState {
   name: string
   price: string
@@ -189,6 +199,13 @@ export default function OrderPage() {
   const [transferTables, setTransferTables] = useState<Table[]>([])
   const [transferLoading, setTransferLoading] = useState(false)
   const [transferError, setTransferError] = useState<string | null>(null)
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false)
+  const [mergeTables, setMergeTables] = useState<MergeTableOption[]>([])
+  const [mergeLoading, setMergeLoading] = useState(false)
+  const [mergeSubmitting, setMergeSubmitting] = useState(false)
+  const [mergeError, setMergeError] = useState<string | null>(null)
+  const [selectedMergeTargetId, setSelectedMergeTargetId] = useState(tableId)
+  const [selectedMergeSourceIds, setSelectedMergeSourceIds] = useState<string[]>([])
   const [supplementForm, setSupplementForm] = useState(getDefaultSupplementForm())
   const [customMenuItemDialogOpen, setCustomMenuItemDialogOpen] = useState(false)
   const [customMenuItemKind, setCustomMenuItemKind] = useState<CustomMenuItemKind | null>(null)
@@ -246,6 +263,11 @@ export default function OrderPage() {
     const interval = setInterval(computeElapsed, 30000) // Refresh toutes les 30s
     return () => clearInterval(interval)
   }, [currentOrder?.created_at])
+
+  useEffect(() => {
+    setSelectedMergeTargetId(tableId)
+    setSelectedMergeSourceIds([])
+  }, [tableId])
 
   const normalizeName = (name: string) => name.trim().toLowerCase().replace(/'/g, "'")
   const normalizeForSearch = (value: string) =>
@@ -386,6 +408,17 @@ export default function OrderPage() {
   const getCartItemPrice = (item: CartItem) => item.price ?? item.menuItem?.price ?? 0
   const getCartItemMenuItemId = (item: CartItem) => item.menuItem?.id || item.menuItemId
   const activeOrderId = currentOrder?.id || liveOrderId || undefined
+  const mergeTargetOptions = useMemo(
+    () =>
+      mergeTables.filter(
+        (tableOption) => tableOption.id === tableId || Boolean(tableOption.openOrderId) || tableOption.status === "available",
+      ),
+    [mergeTables, tableId],
+  )
+  const mergeSourceOptions = useMemo(
+    () => mergeTables.filter((tableOption) => tableOption.id !== selectedMergeTargetId && Boolean(tableOption.openOrderId)),
+    [mergeTables, selectedMergeTargetId],
+  )
 
   const showSendFeedback = (feedback: SendFeedback) => {
     if (sendFeedbackTimeoutRef.current) {
@@ -916,6 +949,127 @@ export default function OrderPage() {
       setTransferError(error instanceof Error ? error.message : "Erreur de chargement")
     } finally {
       setTransferLoading(false)
+    }
+  }
+
+  const openMergeDialog = async () => {
+    setMergeDialogOpen(true)
+    setMergeLoading(true)
+    setMergeSubmitting(false)
+    setMergeError(null)
+    setSelectedMergeTargetId(tableId)
+    setSelectedMergeSourceIds([])
+
+    try {
+      const response = await fetch(`/api/orders/merge/options?currentTableId=${tableId}`)
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}))
+        throw new Error(err?.error || "Chargement impossible")
+      }
+
+      const data = await response.json()
+      const options = Array.isArray(data) ? (data as MergeTableOption[]) : []
+      setMergeTables(options)
+
+      const currentOption = options.find((option) => option.id === tableId)
+      if (currentOption) {
+        setSelectedMergeTargetId(currentOption.id)
+      } else {
+        const fallbackTarget =
+          options.find((option) => Boolean(option.openOrderId) || option.status === "available") || options[0]
+        if (fallbackTarget?.id) {
+          setSelectedMergeTargetId(fallbackTarget.id)
+        }
+      }
+    } catch (error) {
+      setMergeTables([])
+      setMergeError(error instanceof Error ? error.message : "Erreur de chargement")
+    } finally {
+      setMergeLoading(false)
+    }
+  }
+
+  const handleMergeTargetChange = (targetId: string) => {
+    setSelectedMergeTargetId(targetId)
+    setSelectedMergeSourceIds((previous) => previous.filter((id) => id !== targetId))
+  }
+
+  const toggleMergeSourceSelection = (sourceTableId: string) => {
+    setSelectedMergeSourceIds((previous) => {
+      if (previous.includes(sourceTableId)) {
+        return previous.filter((id) => id !== sourceTableId)
+      }
+      return [...previous, sourceTableId]
+    })
+  }
+
+  const mergeTablesIntoTarget = async () => {
+    if (mergeSubmitting) return
+    if (!user?.id) {
+      setMergeError("Utilisateur non connecté.")
+      return
+    }
+    if (!selectedMergeTargetId) {
+      setMergeError("Sélectionnez une table cible.")
+      return
+    }
+    if (selectedMergeSourceIds.length < 1) {
+      setMergeError("Sélectionnez au moins une table source.")
+      return
+    }
+
+    setMergeSubmitting(true)
+    setMergeError(null)
+
+    try {
+      const response = await fetch("/api/orders/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetTableId: selectedMergeTargetId,
+          sourceTableIds: selectedMergeSourceIds,
+          serverId: user.id,
+        }),
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(payload?.error || "Fusion impossible")
+      }
+
+      const destinationTableId = String(payload?.targetTableId || selectedMergeTargetId)
+      const destinationTable = mergeTables.find((tableOption) => tableOption.id === destinationTableId)
+      const mergedSourceLabels = selectedMergeSourceIds
+        .map((sourceId) => {
+          const source = mergeTables.find((tableOption) => tableOption.id === sourceId)
+          return source?.table_number ? `Table ${source.table_number}` : ""
+        })
+        .filter(Boolean)
+
+      setMergeDialogOpen(false)
+      setSelectedMergeSourceIds([])
+      setMergeTables([])
+
+      showSendFeedback({
+        title: "Fusion des tables réussie",
+        lines: [
+          destinationTable?.table_number
+            ? `Table cible: Table ${destinationTable.table_number}`
+            : "Table cible mise à jour.",
+          mergedSourceLabels.length > 0 ? `Sources: ${mergedSourceLabels.join(", ")}` : "",
+        ].filter(Boolean),
+        variant: "success",
+      })
+
+      if (destinationTableId === tableId) {
+        await fetchOrderData()
+      } else {
+        router.push(`/order/${destinationTableId}`)
+      }
+    } catch (error) {
+      setMergeError(error instanceof Error ? error.message : "Erreur pendant la fusion")
+    } finally {
+      setMergeSubmitting(false)
     }
   }
 
@@ -2436,6 +2590,14 @@ export default function OrderPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            onClick={openMergeDialog}
+            variant="outline"
+            size="sm"
+            className="bg-slate-800 text-white border-slate-700 hover:bg-slate-700"
+          >
+            <span className="text-xs sm:text-sm">Fusionner des tables</span>
+          </Button>
           {currentOrder?.id && (
             <Button
               onClick={openTransferDialog}
@@ -3542,6 +3704,142 @@ export default function OrderPage() {
             </Button>
             <Button onClick={saveComplimentary} className="bg-green-600 hover:bg-green-700">
               Confirmer
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Merge Tables Dialog */}
+      <Dialog
+        open={mergeDialogOpen}
+        onOpenChange={(open) => {
+          setMergeDialogOpen(open)
+          if (!open) {
+            setMergeError(null)
+            setMergeSubmitting(false)
+            setSelectedMergeSourceIds([])
+          }
+        }}
+      >
+        <DialogContent className="bg-slate-800 border-slate-700 text-white max-w-[95vw] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Fusionner des tables</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {mergeError && <p className="text-sm text-red-300">{mergeError}</p>}
+
+            {mergeLoading ? (
+              <p className="text-sm text-slate-300">Chargement des options de fusion...</p>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="merge-target-table" className="text-sm text-slate-300">
+                    Table cible
+                  </Label>
+                  {mergeTargetOptions.length === 0 ? (
+                    <p className="text-sm text-slate-300">Aucune table cible disponible.</p>
+                  ) : (
+                    <select
+                      id="merge-target-table"
+                      value={selectedMergeTargetId}
+                      onChange={(event) => handleMergeTargetChange(event.target.value)}
+                      className="w-full h-10 rounded-md border border-slate-600 bg-slate-900 px-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      {mergeTargetOptions.map((tableOption) => (
+                        <option key={tableOption.id} value={tableOption.id}>
+                          Table {tableOption.table_number} {tableOption.openOrderId ? "(occupée)" : "(disponible)"}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm text-slate-300">Tables sources à fusionner</Label>
+                  {mergeSourceOptions.length === 0 ? (
+                    <p className="text-sm text-slate-300">Aucune table source avec commande ouverte.</p>
+                  ) : (
+                    <div className="space-y-2 max-h-72 overflow-y-auto">
+                      {mergeSourceOptions.map((tableOption) => {
+                        const checked = selectedMergeSourceIds.includes(tableOption.id)
+                        const blocked = tableOption.hasPayments
+                        return (
+                          <div
+                            key={tableOption.id}
+                            onClick={() => {
+                              if (!blocked) toggleMergeSourceSelection(tableOption.id)
+                            }}
+                            role={blocked ? undefined : "button"}
+                            tabIndex={blocked ? -1 : 0}
+                            onKeyDown={(event) => {
+                              if (blocked) return
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault()
+                                toggleMergeSourceSelection(tableOption.id)
+                              }
+                            }}
+                            className={`w-full rounded border px-3 py-2 text-left transition-colors ${
+                              blocked
+                                ? "border-red-800 bg-red-950/40 opacity-70 cursor-not-allowed"
+                                : checked
+                                  ? "border-blue-600 bg-blue-900/30 cursor-pointer"
+                                  : "border-slate-600 bg-slate-900 hover:bg-slate-800 cursor-pointer"
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <Checkbox
+                                checked={checked}
+                                disabled={blocked}
+                                className="mt-0.5"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-sm font-semibold text-white">Table {tableOption.table_number}</p>
+                                  <span className="text-xs text-slate-300">
+                                    {tableOption.covers != null && tableOption.covers > 0
+                                      ? `${tableOption.covers} couverts`
+                                      : `${tableOption.seats} places`}
+                                  </span>
+                                </div>
+                                {blocked ? (
+                                  <p className="text-xs text-red-300 mt-1">Paiement enregistré: fusion impossible.</p>
+                                ) : (
+                                  <p className="text-xs text-slate-400 mt-1">Commande ouverte prête à fusionner.</p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-xs text-slate-400">
+                  Les tables avec paiements sont bloquées et ne peuvent pas être fusionnées.
+                </p>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setMergeDialogOpen(false)}
+              className="bg-slate-700 border-slate-600"
+            >
+              Annuler
+            </Button>
+            <Button
+              onClick={mergeTablesIntoTarget}
+              disabled={
+                mergeLoading ||
+                mergeSubmitting ||
+                mergeTargetOptions.length === 0 ||
+                selectedMergeSourceIds.length === 0
+              }
+              className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60"
+            >
+              {mergeSubmitting ? "Fusion..." : "Fusionner"}
             </Button>
           </DialogFooter>
         </DialogContent>
