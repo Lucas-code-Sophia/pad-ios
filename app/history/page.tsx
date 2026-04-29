@@ -23,6 +23,7 @@ import {
   type TicketTaxRow,
 } from "@/lib/ticket-layout"
 import { getItemDisplayInfo } from "@/lib/item-display"
+import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
 
 interface ServerStats {
   server_id: string
@@ -47,6 +48,8 @@ interface DailySalesData {
     totalTax: number
     seasonalDiscountAmount?: number
     seasonalDiscountCount?: number
+    employeeDiscountAmount?: number
+    employeeDiscountCount?: number
   }
   serverStats: ServerStats[]
 }
@@ -107,8 +110,8 @@ export default function HistoryPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
-  const today = new Date().toISOString().split("T")[0]
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0]
+  const today = getBusinessDateIso()
+  const yesterday = shiftIsoDate(today, -1)
   const [selectedDate, setSelectedDate] = useState(today)
   // </CHANGE>
 
@@ -571,7 +574,7 @@ export default function HistoryPage() {
       </div>
 
       {isAdmin && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 mb-4 sm:mb-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 sm:gap-4 mb-4 sm:mb-6">
           <Card className="bg-slate-800 border-slate-700 p-4 sm:p-6">
             <div className="flex items-center gap-3">
               <div className="p-2 sm:p-3 bg-green-600/20 rounded-lg">
@@ -613,6 +616,24 @@ export default function HistoryPage() {
                 <p className="text-xs text-amber-300">
                   {salesData?.statistics.seasonalDiscountCount || 0} remise
                   {(salesData?.statistics.seasonalDiscountCount || 0) > 1 ? "s" : ""}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="bg-slate-800 border-slate-700 p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-rose-600/20 rounded-lg">
+                <BadgePercent className="h-5 w-5 sm:h-6 sm:w-6 text-rose-400" />
+              </div>
+              <div>
+                <p className="text-xs sm:text-sm text-slate-400">Remises salariés</p>
+                <p className="text-xl sm:text-2xl font-bold text-white">
+                  {(salesData?.statistics.employeeDiscountAmount || 0).toFixed(2)} €
+                </p>
+                <p className="text-xs text-rose-300">
+                  {salesData?.statistics.employeeDiscountCount || 0} remise
+                  {(salesData?.statistics.employeeDiscountCount || 0) > 1 ? "s" : ""}
                 </p>
               </div>
             </div>
@@ -709,6 +730,7 @@ export default function HistoryPage() {
                                 {new Date(table.created_at).toLocaleTimeString("fr-FR", {
                                   hour: "2-digit",
                                   minute: "2-digit",
+                                  timeZone: "Europe/Paris",
                                 })}
                               </p>
                             </div>
@@ -756,6 +778,7 @@ export default function HistoryPage() {
                         {new Date(sale.created_at).toLocaleTimeString("fr-FR", {
                           hour: "2-digit",
                           minute: "2-digit",
+                          timeZone: "Europe/Paris",
                         })}
                       </td>
                       <td className="p-3 sm:p-4">

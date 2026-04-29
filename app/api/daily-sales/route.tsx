@@ -1,11 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createServerClient } from "@/lib/supabase/server"
 import { RESTAURANT_OPENING_DATE, isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
+import { getBusinessDateIso } from "@/lib/business-date"
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const date = searchParams.get("date") || new Date().toISOString().split("T")[0]
+    const date = searchParams.get("date") || getBusinessDateIso()
     const normalizeText = (value: unknown) =>
       String(value || "")
         .normalize("NFD")
@@ -24,6 +25,8 @@ export async function GET(request: NextRequest) {
           totalTax: 0,
           seasonalDiscountAmount: 0,
           seasonalDiscountCount: 0,
+          employeeDiscountAmount: 0,
+          employeeDiscountCount: 0,
         },
         serverStats: [],
       })
@@ -54,6 +57,8 @@ export async function GET(request: NextRequest) {
 
     let seasonalDiscountAmount = 0
     let seasonalDiscountCount = 0
+    let employeeDiscountAmount = 0
+    let employeeDiscountCount = 0
 
     if (orderIds.length > 0) {
       const { data: orderItems } = await supabase
@@ -94,9 +99,14 @@ export async function GET(request: NextRequest) {
         const normalizedNotes = normalizeText((sup as any).notes)
         const isSeasonalDiscount =
           normalizedName.includes("remise saisonnier -10") || normalizedNotes.includes("remise -10% saisonnier")
+        const isEmployeeDiscount = normalizedName.includes("remise salarie -50") || normalizedNotes.includes("remise -50%")
         if (isSeasonalDiscount && lineTotal < 0) {
           seasonalDiscountAmount += Math.abs(lineTotal)
           seasonalDiscountCount += 1
+        }
+        if (isEmployeeDiscount && lineTotal < 0) {
+          employeeDiscountAmount += Math.abs(lineTotal)
+          employeeDiscountCount += 1
         }
       }
     }
@@ -134,6 +144,8 @@ export async function GET(request: NextRequest) {
         totalTax,
         seasonalDiscountAmount,
         seasonalDiscountCount,
+        employeeDiscountAmount,
+        employeeDiscountCount,
       },
       serverStats: Object.values(serverStats || {}),
     })

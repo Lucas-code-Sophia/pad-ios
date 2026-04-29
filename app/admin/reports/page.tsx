@@ -74,6 +74,10 @@ interface ServiceData {
     card: { amount: number; orders: number }
     other: { amount: number; orders: number }
   }
+  discount_breakdown: {
+    seasonal: { amount: number; count: number }
+    employee: { amount: number; count: number }
+  }
 }
 
 interface ServerSummary {
@@ -123,6 +127,10 @@ interface ServiceSummaryData {
       cash: { amount: number; orders: number }
       card: { amount: number; orders: number }
       other: { amount: number; orders: number }
+    }
+    discount_breakdown: {
+      seasonal: { amount: number; count: number }
+      employee: { amount: number; count: number }
     }
   }
 }
@@ -1030,8 +1038,8 @@ export default function ReportsPage() {
                 </h2>
               </div>
 
-              {/* Cash / CB breakdown */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+              {/* Cash / CB / remises breakdown */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
                 <Card className="bg-gradient-to-br from-emerald-900/25 to-emerald-800/20 border-emerald-700/50">
                   <CardContent className="pt-4 pb-4">
                     <div className="text-xs text-emerald-300 uppercase tracking-wide">Cash</div>
@@ -1065,6 +1073,30 @@ export default function ReportsPage() {
                     <div className="text-xs text-slate-300 mt-1">
                       {summaryData.totals.payment_breakdown.other.orders} encaissement
                       {summaryData.totals.payment_breakdown.other.orders > 1 ? "s" : ""}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-amber-900/25 to-amber-800/20 border-amber-700/50">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-xs text-amber-300 uppercase tracking-wide">Remise saisonnier</div>
+                    <div className="text-2xl font-bold text-white mt-1">
+                      {summaryData.totals.discount_breakdown.seasonal.amount.toFixed(2)} €
+                    </div>
+                    <div className="text-xs text-amber-200 mt-1">
+                      {summaryData.totals.discount_breakdown.seasonal.count} remise
+                      {summaryData.totals.discount_breakdown.seasonal.count > 1 ? "s" : ""}
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-rose-900/25 to-rose-800/20 border-rose-700/50">
+                  <CardContent className="pt-4 pb-4">
+                    <div className="text-xs text-rose-300 uppercase tracking-wide">Remise salarié</div>
+                    <div className="text-2xl font-bold text-white mt-1">
+                      {summaryData.totals.discount_breakdown.employee.amount.toFixed(2)} €
+                    </div>
+                    <div className="text-xs text-rose-200 mt-1">
+                      {summaryData.totals.discount_breakdown.employee.count} remise
+                      {summaryData.totals.discount_breakdown.employee.count > 1 ? "s" : ""}
                     </div>
                   </CardContent>
                 </Card>
@@ -1126,6 +1158,22 @@ export default function ReportsPage() {
                             {summaryData.services.midi.payment_breakdown.card.amount.toFixed(2)} €
                           </span>
                         </div>
+                        {summaryData.services.midi.discount_breakdown.seasonal.amount > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400 text-sm">Remise saisonnier</span>
+                            <span className="text-amber-300">
+                              {summaryData.services.midi.discount_breakdown.seasonal.amount.toFixed(2)} €
+                            </span>
+                          </div>
+                        )}
+                        {summaryData.services.midi.discount_breakdown.employee.amount > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400 text-sm">Remise salarié</span>
+                            <span className="text-rose-300">
+                              {summaryData.services.midi.discount_breakdown.employee.amount.toFixed(2)} €
+                            </span>
+                          </div>
+                        )}
                         {summaryData.services.midi.avg_duration && (
                           <div className="flex justify-between">
                             <span className="text-slate-400 text-sm">Durée moy.</span>
@@ -1184,6 +1232,22 @@ export default function ReportsPage() {
                             {summaryData.services.soir.payment_breakdown.card.amount.toFixed(2)} €
                           </span>
                         </div>
+                        {summaryData.services.soir.discount_breakdown.seasonal.amount > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400 text-sm">Remise saisonnier</span>
+                            <span className="text-amber-300">
+                              {summaryData.services.soir.discount_breakdown.seasonal.amount.toFixed(2)} €
+                            </span>
+                          </div>
+                        )}
+                        {summaryData.services.soir.discount_breakdown.employee.amount > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-slate-400 text-sm">Remise salarié</span>
+                            <span className="text-rose-300">
+                              {summaryData.services.soir.discount_breakdown.employee.amount.toFixed(2)} €
+                            </span>
+                          </div>
+                        )}
                         {summaryData.services.soir.avg_duration && (
                           <div className="flex justify-between">
                             <span className="text-slate-400 text-sm">Durée moy.</span>

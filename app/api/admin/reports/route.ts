@@ -5,7 +5,7 @@ import {
   clampDateToRestaurantOpening,
   isBeforeRestaurantOpeningDate,
 } from "@/lib/restaurant-opening"
-import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
+import { getBusinessDateIso, getBusinessHour, shiftIsoDate } from "@/lib/business-date"
 
 export async function GET(request: NextRequest) {
   try {
@@ -382,8 +382,8 @@ export async function GET(request: NextRequest) {
       const openTime = sale.order_id ? orderOpenTimeMap.get(sale.order_id) : null
       const timestamp = openTime || sale.created_at
       if (!timestamp) continue
-      const d = new Date(timestamp)
-      const hour = d.getHours()
+      const hour = getBusinessHour(timestamp)
+      if (hour == null) continue
       hourlyMap[hour].total += Number.parseFloat(sale.total_amount)
       hourlyMap[hour].orders += 1
     }

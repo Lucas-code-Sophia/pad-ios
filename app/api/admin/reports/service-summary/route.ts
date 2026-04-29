@@ -1,7 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 import { isBeforeRestaurantOpeningDate } from "@/lib/restaurant-opening"
-import { getBusinessDateIso, shiftIsoDate } from "@/lib/business-date"
+import { formatBusinessTime, getBusinessDateIso, getBusinessHour, shiftIsoDate } from "@/lib/business-date"
 
 type PaymentBucketMethod = "cash" | "card" | "other"
 type OrderPaymentMethod = PaymentBucketMethod | "mixed"
@@ -36,6 +36,13 @@ type DailySaleRow = {
   created_at: string | null
 }
 
+type DiscountBucket = {
+  seasonal_amount: number
+  seasonal_count: number
+  employee_amount: number
+  employee_count: number
+}
+
 const normalizePaymentMethod = (value: unknown): PaymentBucketMethod => {
   if (value === "cash") return "cash"
   if (value === "card") return "card"
@@ -45,6 +52,25 @@ const normalizePaymentMethod = (value: unknown): PaymentBucketMethod => {
 const toNumber = (value: unknown) => {
   const n = Number(value)
   return Number.isFinite(n) ? n : 0
+}
+
+const normalizeText = (value: unknown) =>
+  String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim()
+
+const isSeasonalDiscountSupplement = (name: unknown, notes: unknown) => {
+  const normalizedName = normalizeText(name)
+  const normalizedNotes = normalizeText(notes)
+  return normalizedName.includes("remise saisonnier -10") || normalizedNotes.includes("remise -10% saisonnier")
+}
+
+const isEmployeeDiscountSupplement = (name: unknown, notes: unknown) => {
+  const normalizedName = normalizeText(name)
+  const normalizedNotes = normalizeText(notes)
+  return normalizedName.includes("remise salarie -50") || normalizedNotes.includes("remise -50%")
 }
 
 export async function GET(request: NextRequest) {
@@ -194,6 +220,47 @@ export async function GET(request: NextRequest) {
           .in("order_id", orderIds)
       : { data: [] as any[] }
 
+    const { data: allSupplements } = orderIds.length
+      ? await supabase
+          .from("supplements")
+          .select("order_id, amount, name, notes, is_complimentary")
+          .in("order_id", orderIds)
+      : { data: [] as any[] }
+
+    const discountsByOrder = new Map<string, DiscountBucket>()
+    for (const supplement of allSupplements || []) {
+      if (supplement?.is_complimentary) continue
+      const orderId = String(supplement?.order_id || "")
+      if (!orderId) continue
+
+      const rawAmount = toNumber(supplement?.amount)
+      if (rawAmount >= 0) continue
+      const discountAmount = Math.abs(rawAmount)
+      if (discountAmount <= 0) continue
+
+      const seasonal = isSeasonalDiscountSupplement(supplement?.name, supplement?.notes)
+      const employee = isEmployeeDiscountSupplement(supplement?.name, supplement?.notes)
+      if (!seasonal && !employee) continue
+
+      const current = discountsByOrder.get(orderId) || {
+        seasonal_amount: 0,
+        seasonal_count: 0,
+        employee_amount: 0,
+        employee_count: 0,
+      }
+
+      if (seasonal) {
+        current.seasonal_amount += discountAmount
+        current.seasonal_count += 1
+      }
+      if (employee) {
+        current.employee_amount += discountAmount
+        current.employee_count += 1
+      }
+
+      discountsByOrder.set(orderId, current)
+    }
+
     const orderItemsByOrder = new Map<string, any[]>()
     for (const item of allOrderItems || []) {
       const id = String(item.order_id || "")
@@ -258,6 +325,19 @@ export async function GET(request: NextRequest) {
       totalCardOrders = 0
     let totalOtherAmount = 0,
       totalOtherOrders = 0
+    let midiSeasonalDiscountAmount = 0,
+      midiSeasonalDiscountCount = 0,
+      midiEmployeeDiscountAmount = 0,
+      midiEmployeeDiscountCount = 0
+    let soirSeasonalDiscountAmount = 0,
+      soirSeasonalDiscountCount = 0,
+      soirEmployeeDiscountAmount = 0,
+      soirEmployeeDiscountCount = 0
+    let totalSeasonalDiscountAmount = 0,
+      totalSeasonalDiscountCount = 0,
+      totalEmployeeDiscountAmount = 0,
+      totalEmployeeDiscountCount = 0
+    const processedDiscountOrders = new Set<string>()
 
     // ── Top dishes tracking ──
     const dishCountMap: Record<string, { name: string; quantity: number; revenue: number }> = {}
@@ -290,7 +370,7 @@ export async function GET(request: NextRequest) {
       }
 
       // Service (midi < 16h, soir >= 16h)
-      const hour = createdAt ? new Date(createdAt).getHours() : 12
+      const hour = createdAt ? (getBusinessHour(createdAt) ?? 12) : 12
       const service: "midi" | "soir" = hour < 16 ? "midi" : "soir"
 
       if (service === "midi") {
@@ -357,6 +437,28 @@ export async function GET(request: NextRequest) {
         totalOtherOrders++
       }
 
+      if (orderId && !processedDiscountOrders.has(orderId)) {
+        const orderDiscounts = discountsByOrder.get(orderId)
+        if (orderDiscounts) {
+          if (service === "midi") {
+            midiSeasonalDiscountAmount += orderDiscounts.seasonal_amount
+            midiSeasonalDiscountCount += orderDiscounts.seasonal_count
+            midiEmployeeDiscountAmount += orderDiscounts.employee_amount
+            midiEmployeeDiscountCount += orderDiscounts.employee_count
+          } else {
+            soirSeasonalDiscountAmount += orderDiscounts.seasonal_amount
+            soirSeasonalDiscountCount += orderDiscounts.seasonal_count
+            soirEmployeeDiscountAmount += orderDiscounts.employee_amount
+            soirEmployeeDiscountCount += orderDiscounts.employee_count
+          }
+          totalSeasonalDiscountAmount += orderDiscounts.seasonal_amount
+          totalSeasonalDiscountCount += orderDiscounts.seasonal_count
+          totalEmployeeDiscountAmount += orderDiscounts.employee_amount
+          totalEmployeeDiscountCount += orderDiscounts.employee_count
+        }
+        processedDiscountOrders.add(orderId)
+      }
+
       if (!serverStatsMap[serverId]) {
         serverStatsMap[serverId] = {
           server_id: serverId,
@@ -388,9 +490,7 @@ export async function GET(request: NextRequest) {
         covers: covers || null,
         duration_min: durationMin,
         service,
-        time: createdAt
-          ? new Date(createdAt).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })
-          : "--:--",
+        time: createdAt ? formatBusinessTime(createdAt) : "--:--",
         payment_method: paymentMethod,
       })
 
@@ -449,6 +549,10 @@ export async function GET(request: NextRequest) {
                 card: { amount: midiCardAmount, orders: midiCardOrders },
                 other: { amount: midiOtherAmount, orders: midiOtherOrders },
               },
+              discount_breakdown: {
+                seasonal: { amount: midiSeasonalDiscountAmount, count: midiSeasonalDiscountCount },
+                employee: { amount: midiEmployeeDiscountAmount, count: midiEmployeeDiscountCount },
+              },
             }
           : null,
       soir:
@@ -464,6 +568,10 @@ export async function GET(request: NextRequest) {
                 cash: { amount: soirCashAmount, orders: soirCashOrders },
                 card: { amount: soirCardAmount, orders: soirCardOrders },
                 other: { amount: soirOtherAmount, orders: soirOtherOrders },
+              },
+              discount_breakdown: {
+                seasonal: { amount: soirSeasonalDiscountAmount, count: soirSeasonalDiscountCount },
+                employee: { amount: soirEmployeeDiscountAmount, count: soirEmployeeDiscountCount },
               },
             }
           : null,
@@ -519,7 +627,8 @@ export async function GET(request: NextRequest) {
       const order = orderById.get(orderId)
       const ts = order?.created_at || sale.created_at
       if (!ts) continue
-      const h = new Date(ts).getHours()
+      const h = getBusinessHour(ts)
+      if (h == null) continue
       hourlyCount[h] = (hourlyCount[h] || 0) + 1
     }
     const busiestHour = Object.entries(hourlyCount).sort((a, b) => Number(b[1]) - Number(a[1]))[0]
@@ -563,6 +672,10 @@ export async function GET(request: NextRequest) {
           cash: { amount: totalCashAmount, orders: totalCashOrders },
           card: { amount: totalCardAmount, orders: totalCardOrders },
           other: { amount: totalOtherAmount, orders: totalOtherOrders },
+        },
+        discount_breakdown: {
+          seasonal: { amount: totalSeasonalDiscountAmount, count: totalSeasonalDiscountCount },
+          employee: { amount: totalEmployeeDiscountAmount, count: totalEmployeeDiscountCount },
         },
       },
     })
