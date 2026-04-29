@@ -21,6 +21,7 @@ import {
   Calendar,
   DollarSign,
   LayoutGrid,
+  Wine,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -46,6 +47,7 @@ export default function AdminPage() {
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editUserDialog, setEditUserDialog] = useState(false)
   const [showUsersDialog, setShowUsersDialog] = useState(false)
+  const [wineCriticalCount, setWineCriticalCount] = useState(0)
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
@@ -57,6 +59,7 @@ export default function AdminPage() {
     if (user?.role === "manager") {
       fetchDailySales()
       fetchUsers()
+      fetchWineInventoryCriticalCount()
     }
   }, [user])
 
@@ -81,6 +84,22 @@ export default function AdminPage() {
       }
     } catch (error) {
       console.error("[v0] Error fetching users:", error)
+    }
+  }
+
+  const fetchWineInventoryCriticalCount = async () => {
+    try {
+      const response = await fetch("/api/admin/wine-inventory")
+      if (!response.ok) {
+        setWineCriticalCount(0)
+        return
+      }
+
+      const payload = await response.json().catch(() => ({}))
+      setWineCriticalCount(Math.max(0, Number(payload?.criticalCount || 0)))
+    } catch (error) {
+      console.error("[v0] Error fetching wine inventory critical count:", error)
+      setWineCriticalCount(0)
     }
   }
 
@@ -506,6 +525,33 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent className="p-4 sm:p-6 pt-0">
             <p className="text-slate-300 text-xs sm:text-sm">Ajouter, modifier et organiser les plats et boissons</p>
+          </CardContent>
+        </Card>
+
+        <Card
+          className="relative bg-slate-800 border-slate-700 hover:border-pink-500 transition-colors cursor-pointer"
+          onClick={() => router.push("/admin/wine-inventory")}
+        >
+          {wineCriticalCount > 0 && (
+            <div className="absolute top-2 left-2 z-10 h-6 min-w-6 px-1 rounded-full bg-red-600 text-white text-xs font-bold flex items-center justify-center">
+              {wineCriticalCount}
+            </div>
+          )}
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-rose-600 rounded-lg">
+                <Wine className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-white text-base sm:text-lg">Inventaire vin</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Bouteilles et vins au verre</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <p className="text-slate-300 text-xs sm:text-sm">
+              Suivre le stock vin séparément avec alertes critiques et recomptage complet
+            </p>
           </CardContent>
         </Card>
 

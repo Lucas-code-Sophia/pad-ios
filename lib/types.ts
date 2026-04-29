@@ -272,3 +272,56 @@ export interface PlanningAssignment {
   work_end: string | null
   created_at: string
 }
+
+export interface WineInventoryLink {
+  id: string
+  wineInventoryItemId: string
+  glassMenuItemId: string
+  glassName: string
+  glassCategory: string | null
+  factor: number
+  isActive: boolean
+}
+
+export interface WineInventoryItem {
+  id: string
+  bottleMenuItemId: string
+  bottleName: string
+  bottleCategory: string | null
+  currentBottles: number
+  isActive: boolean
+  gauge: "green" | "yellow" | "red" | "inactive"
+  links: WineInventoryLink[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WineInventorySettings {
+  redThreshold: number
+  yellowThreshold: number
+  trackingStartedAt: string | null
+}
+
+export interface WineInventoryMovement {
+  id: string
+  wineInventoryItemId: string
+  movementType: "sale_bottle" | "sale_glass" | "correction" | "recount"
+  delta: number
+  sourceOrderItemId?: string | null
+  sourceMenuItemId?: string | null
+  note?: string | null
+  metadata?: Record<string, unknown> | null
+  createdAt: string
+  createdBy?: string | null
+}
+
+export interface WineInventorySummary {
+  settings: WineInventorySettings
+  criticalCount: number
+  items: WineInventoryItem[]
+  availableGlassItems: Array<{
+    id: string
+    name: string
+    category: string | null
+  }>
+}
