@@ -11,6 +11,7 @@ import {
   buildReceiptTicketHtml,
   buildTicketPaymentRows,
   formatTicketDateTime,
+  generateRandomTicketRef,
   type TicketItemRow,
   type TicketPrintLine,
   type TicketTaxRow,
@@ -131,6 +132,8 @@ export default function BillPage() {
   const [complimentaryReason, setComplimentaryReason] = useState("")
   const [billPreviewDialogOpen, setBillPreviewDialogOpen] = useState(false)
   const [mealTicketDialogOpen, setMealTicketDialogOpen] = useState(false)
+  const [billTicketRef, setBillTicketRef] = useState(() => generateRandomTicketRef())
+  const [mealTicketRef, setMealTicketRef] = useState(() => generateRandomTicketRef())
   const [mealTicketMealsCount, setMealTicketMealsCount] = useState("3")
   const [mealTicketTotal, setMealTicketTotal] = useState("")
   const [mealTicketIncludeTax, setMealTicketIncludeTax] = useState(true)
@@ -864,7 +867,7 @@ export default function BillPage() {
       tr: paymentBreakdown.tr,
       renderedChange,
     })
-    const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = billTicketRef
 
     return buildReceiptTicketHtml({
       documentTitle: `Addition - Table ${context.tableNumber}`,
@@ -900,7 +903,7 @@ export default function BillPage() {
       tr: paymentBreakdown.tr,
       renderedChange,
     })
-    const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = mealTicketRef
 
     return buildReceiptTicketHtml({
       documentTitle: `Ticket repas - Table ${context.tableNumber}`,
@@ -937,7 +940,7 @@ export default function BillPage() {
       tr: paymentBreakdown.tr,
       renderedChange,
     })
-    const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = billTicketRef
 
     return buildReceiptPrintLines({
       documentTitle: `Addition - Table ${context.tableNumber}`,
@@ -973,7 +976,7 @@ export default function BillPage() {
       tr: paymentBreakdown.tr,
       renderedChange,
     })
-    const ticketRef = `Fre_${(order?.id || tableId || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = mealTicketRef
 
     return buildReceiptPrintLines({
       documentTitle: `Ticket repas - Table ${context.tableNumber}`,
@@ -998,11 +1001,13 @@ export default function BillPage() {
   const buildMealTicketPdfLines = () => buildMealTicketPrintLines().map((line) => line.content)
 
   const openBillPreview = () => {
+    setBillTicketRef(generateRandomTicketRef())
     setBillPreviewDialogOpen(true)
   }
 
   const openMealTicketPreview = () => {
     const defaultMealsCount = table?.current_covers && table.current_covers > 0 ? table.current_covers : 3
+    setMealTicketRef(generateRandomTicketRef())
     setMealTicketMealsCount(String(defaultMealsCount))
     setMealTicketTotal(calculateRemainingAmount().toFixed(2))
     setMealTicketIncludeTax(true)

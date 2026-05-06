@@ -337,7 +337,7 @@ BEGIN
         _old_wine_item_id,
         -_old_amount,
         _old_kind,
-        OLD.id,
+        NULL,
         OLD.menu_item_id
       );
     END IF;
@@ -390,7 +390,7 @@ BEGIN
       _old_wine_item_id,
       -_old_amount,
       _old_kind,
-      NEW.id,
+      OLD.id,
       OLD.menu_item_id
     );
   END IF;

@@ -1,6 +1,18 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@/lib/supabase/server"
 
+const isWineInventoryDeleteFkError = (error: any) => {
+  const haystack = [
+    String(error?.message || ""),
+    String(error?.details || ""),
+    String(error?.hint || ""),
+  ]
+    .join(" ")
+    .toLowerCase()
+
+  return haystack.includes("wine_inventory_movements") || haystack.includes("source_order_item_id")
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { orderId, items, serverId } = await request.json()
@@ -23,20 +35,42 @@ export async function POST(request: NextRequest) {
       return menuName === "sirop à l'eau" && notes.includes("inclus menu enfant")
     }
 
+    const deleteOrderItem = async (itemId: string) => {
+      const attemptDelete = async () =>
+        await supabase.from("order_items").delete().eq("order_id", orderId).eq("id", itemId)
+
+      const firstAttempt = await attemptDelete()
+      if (!firstAttempt.error) return
+
+      if (!isWineInventoryDeleteFkError(firstAttempt.error)) {
+        throw firstAttempt.error
+      }
+
+      const { error: rewindError } = await supabase
+        .from("order_items")
+        .update({
+          status: "pending",
+          fired_at: null,
+          printed_fired_at: null,
+        })
+        .eq("order_id", orderId)
+        .eq("id", itemId)
+
+      if (rewindError) {
+        throw rewindError
+      }
+
+      const secondAttempt = await attemptDelete()
+      if (secondAttempt.error) {
+        throw secondAttempt.error
+      }
+    }
+
     // Mettre à jour les articles existants au lieu de les réinsérer
     const updatePromises = items.map(async (item: any) => {
       if (item.quantity === 0) {
         // Supprimer l'article
-        const { error } = await supabase
-          .from("order_items")
-          .delete()
-          .eq("order_id", orderId)
-          .eq("id", item.cartItemId)
-
-        if (error) {
-          console.error("[v0] Error deleting item:", error)
-          throw error
-        }
+        await deleteOrderItem(item.cartItemId)
         return { deleted: true, id: item.cartItemId }
       } else {
         // Mettre à jour l'article
@@ -81,6 +115,9 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error("[v0] Error in fire-follow API:", error)
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 },
+    )
   }
 }

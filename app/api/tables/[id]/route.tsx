@@ -38,7 +38,7 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
 
     if (error) {
       console.error("[v0] Error deleting table:", error)
-      return NextResponse.json({ error: "Failed to delete table" }, { status: 500 })
+      return NextResponse.json({ error: error.message || "Failed to delete table" }, { status: 500 })
     }
 
     if (!data) {

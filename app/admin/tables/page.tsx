@@ -7,10 +7,12 @@ import type { Table } from "@/lib/types"
 import { sortTablesForDisplay } from "@/lib/table-sort"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ArrowLeft, Edit2, Trash2 } from "lucide-react"
+import { AlertTriangle, ArrowLeft, Edit2, Trash2 } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+
+const DELETE_ALL_TABLES_PHRASE = "SUPPRIMER TOUTES LES TABLES"
 
 export default function TablesManagementPage() {
   const { user, isLoading } = useAuth()
@@ -20,6 +22,8 @@ export default function TablesManagementPage() {
   const [editingTable, setEditingTable] = useState<Table | null>(null)
   const [editDialog, setEditDialog] = useState(false)
   const [newTableName, setNewTableName] = useState("")
+  const [deleteAllConfirmation, setDeleteAllConfirmation] = useState("")
+  const [deletingAllTables, setDeletingAllTables] = useState(false)
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
@@ -69,18 +73,56 @@ export default function TablesManagementPage() {
   }
 
   const handleDeleteTable = async (tableId: string) => {
-    if (!confirm("Êtes-vous sûr de vouloir supprimer cette table ?")) return
+    if (!confirm("Êtes-vous sûr de vouloir supprimer définitivement cette table ?")) return
 
     try {
       const response = await fetch(`/api/tables/${tableId}`, {
         method: "DELETE",
       })
 
-      if (response.ok) {
-        fetchTables()
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(payload?.error || "Impossible de supprimer cette table.")
+        return
       }
+
+      fetchTables()
     } catch (error) {
       console.error("[v0] Error deleting table:", error)
+      alert("Erreur réseau pendant la suppression de la table.")
+    }
+  }
+
+  const handleDeleteAllTables = async () => {
+    if (deleteAllConfirmation.trim() !== DELETE_ALL_TABLES_PHRASE) {
+      alert(`Tape exactement: ${DELETE_ALL_TABLES_PHRASE}`)
+      return
+    }
+
+    if (!confirm("Suppression DÉFINITIVE de toutes les tables. Continuer ?")) return
+
+    try {
+      setDeletingAllTables(true)
+      const response = await fetch("/api/tables", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scope: "all" }),
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        alert(payload?.error || "Impossible de supprimer toutes les tables.")
+        return
+      }
+
+      alert(`${Number(payload?.deletedCount || 0)} table(s) supprimée(s) définitivement.`)
+      setDeleteAllConfirmation("")
+      fetchTables()
+    } catch (error) {
+      console.error("[v0] Error deleting all tables:", error)
+      alert("Erreur réseau pendant la suppression définitive.")
+    } finally {
+      setDeletingAllTables(false)
     }
   }
 
@@ -151,6 +193,38 @@ export default function TablesManagementPage() {
               </Card>
             ))}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-red-950/40 border-red-800 mt-4 sm:mt-6">
+        <CardHeader className="p-4 sm:p-6">
+          <CardTitle className="text-red-200 text-base sm:text-lg flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 sm:h-5 sm:w-5" />
+            Suppression définitive (danger)
+          </CardTitle>
+          <CardDescription className="text-red-300/80 text-xs sm:text-sm">
+            Cette action supprime toutes les tables et leurs données liées (commandes, items, etc.).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="p-4 sm:p-6 pt-0 space-y-3">
+          <div className="space-y-1.5">
+            <Label className="text-xs sm:text-sm text-red-200">
+              Tapez "{DELETE_ALL_TABLES_PHRASE}" pour confirmer
+            </Label>
+            <Input
+              value={deleteAllConfirmation}
+              onChange={(event) => setDeleteAllConfirmation(event.target.value)}
+              className="bg-slate-800 border-red-700/70 text-red-100"
+              placeholder={DELETE_ALL_TABLES_PHRASE}
+            />
+          </div>
+          <Button
+            onClick={handleDeleteAllTables}
+            disabled={deletingAllTables || deleteAllConfirmation.trim() !== DELETE_ALL_TABLES_PHRASE}
+            className="w-full bg-red-700 hover:bg-red-800 disabled:opacity-50 text-sm"
+          >
+            {deletingAllTables ? "Suppression..." : "Supprimer définitivement toutes les tables"}
+          </Button>
         </CardContent>
       </Card>
 

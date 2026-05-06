@@ -47,6 +47,7 @@ export type TicketLayoutData = {
 const TICKET_TEXT_WIDTH = 48
 const SEPARATOR_LINE = "-".repeat(TICKET_TEXT_WIDTH)
 const SHORT_SEPARATOR_LINE = "-".repeat(31)
+const TICKET_REF_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const TICKET_HEADER = [
   "Sophia",
   "67 BOULEVARD DE LA PLAGE",
@@ -55,6 +56,30 @@ const TICKET_HEADER = [
   "SARL LILY",
   "SIRET : 94077148800027",
 ] as const
+
+const buildRandomToken = (length: number) => {
+  if (length <= 0) return ""
+
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.getRandomValues) {
+    const bytes = new Uint8Array(length)
+    globalThis.crypto.getRandomValues(bytes)
+    return Array.from(bytes)
+      .map((byte) => TICKET_REF_ALPHABET[byte % TICKET_REF_ALPHABET.length])
+      .join("")
+  }
+
+  let fallback = ""
+  for (let index = 0; index < length; index += 1) {
+    fallback += TICKET_REF_ALPHABET[Math.floor(Math.random() * TICKET_REF_ALPHABET.length)]
+  }
+  return fallback
+}
+
+export const generateRandomTicketRef = () => {
+  const timePart = Date.now().toString(36).toUpperCase()
+  const randomPart = buildRandomToken(8)
+  return `Fre_${timePart}${randomPart}`
+}
 
 export const formatTicketAmount = (value: number) =>
   Number(value || 0).toLocaleString("fr-FR", {

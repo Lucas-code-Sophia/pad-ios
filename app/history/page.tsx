@@ -18,6 +18,7 @@ import {
   buildReceiptTicketHtml,
   buildTicketPaymentRows,
   formatTicketDateTime,
+  generateRandomTicketRef,
   type TicketItemRow,
   type TicketPrintLine,
   type TicketTaxRow,
@@ -128,6 +129,8 @@ export default function HistoryPage() {
   const [mealTicketTotal, setMealTicketTotal] = useState("")
   const [mealTicketIncludeTax, setMealTicketIncludeTax] = useState(true)
   const [mealTicketTaxRate, setMealTicketTaxRate] = useState<10 | 20>(10)
+  const [billTicketRef, setBillTicketRef] = useState(() => generateRandomTicketRef())
+  const [mealTicketRef, setMealTicketRef] = useState(() => generateRandomTicketRef())
   const [printingBillTicket, setPrintingBillTicket] = useState(false)
   const [printingMealTicket, setPrintingMealTicket] = useState(false)
 
@@ -172,6 +175,8 @@ export default function HistoryPage() {
     setTransactionDetailLoading(true)
     setBillTicketDialogOpen(false)
     setMealTicketDialogOpen(false)
+    setBillTicketRef(generateRandomTicketRef())
+    setMealTicketRef(generateRandomTicketRef())
 
     try {
       const response = await fetch(`/api/daily-sales/${sale.id}`)
@@ -317,7 +322,7 @@ export default function HistoryPage() {
       })),
     ]
 
-    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = billTicketRef
     const paymentRows = getTransactionPaymentRows()
 
     return buildReceiptTicketHtml({
@@ -376,7 +381,7 @@ export default function HistoryPage() {
       })),
     ]
 
-    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = billTicketRef
     const paymentRows = getTransactionPaymentRows()
 
     return buildReceiptPrintLines({
@@ -412,7 +417,7 @@ export default function HistoryPage() {
       { rate: 10, ht: rate === 10 ? subtotal : 0, tva: rate === 10 ? taxAmount : 0, ttc: rate === 10 ? total : 0 },
       { rate: 20, ht: rate === 20 ? subtotal : 0, tva: rate === 20 ? taxAmount : 0, ttc: rate === 20 ? total : 0 },
     ]
-    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = mealTicketRef
     const rows: TicketItemRow[] = [{ label: `${mealsCount} Ticket repas`, amount: total }]
     const paymentRows = getTransactionPaymentRows()
 
@@ -449,7 +454,7 @@ export default function HistoryPage() {
       { rate: 10, ht: rate === 10 ? subtotal : 0, tva: rate === 10 ? taxAmount : 0, ttc: rate === 10 ? total : 0 },
       { rate: 20, ht: rate === 20 ? subtotal : 0, tva: rate === 20 ? taxAmount : 0, ttc: rate === 20 ? total : 0 },
     ]
-    const ticketRef = `Fre_${(transactionDetail.order?.id || transactionDetail.sale.id || "SOPHIA").replace(/-/g, "").slice(0, 14)} [01-N°1]`
+    const ticketRef = mealTicketRef
     const rows: TicketItemRow[] = [{ label: `${mealsCount} Ticket repas`, amount: total }]
     const paymentRows = getTransactionPaymentRows()
 
@@ -473,6 +478,7 @@ export default function HistoryPage() {
 
   const openMealTicketPreview = () => {
     if (!transactionDetail) return
+    setMealTicketRef(generateRandomTicketRef())
     setMealTicketMealsCount(3)
     setMealTicketTotal(Number(transactionDetail.sale.total_amount || 0).toFixed(2))
     setMealTicketIncludeTax(true)
@@ -482,6 +488,7 @@ export default function HistoryPage() {
 
   const openBillTicketPreview = () => {
     if (!transactionDetail) return
+    setBillTicketRef(generateRandomTicketRef())
     setBillTicketDialogOpen(true)
   }
 
@@ -819,6 +826,8 @@ export default function HistoryPage() {
             setTransactionDetailLoading(false)
             setBillTicketDialogOpen(false)
             setMealTicketDialogOpen(false)
+            setBillTicketRef(generateRandomTicketRef())
+            setMealTicketRef(generateRandomTicketRef())
           }
         }}
       >

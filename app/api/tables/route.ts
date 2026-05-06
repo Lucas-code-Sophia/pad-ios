@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { createClient } from "@/lib/supabase/server"
+import { createClient, createServerClient } from "@/lib/supabase/server"
 
 export async function GET() {
   try {
@@ -91,6 +91,43 @@ export async function POST(request: Request) {
     return NextResponse.json(table)
   } catch (error) {
     console.error("[v0] Error in tables POST API:", error)
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Internal server error" },
+      { status: 500 },
+    )
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const supabase = await createServerClient()
+    const body = await request.json().catch(() => ({}))
+    const scope = String(body?.scope || "all")
+
+    if (scope !== "all") {
+      return NextResponse.json({ error: "Invalid delete scope" }, { status: 400 })
+    }
+
+    const { data: existingTables, error: listError } = await supabase.from("tables").select("id")
+    if (listError) {
+      console.error("[v0] Error listing tables before bulk delete:", listError)
+      return NextResponse.json({ error: listError.message || "Failed to list tables" }, { status: 500 })
+    }
+
+    const tableIds = (existingTables || []).map((row: any) => String(row.id || "")).filter(Boolean)
+    if (tableIds.length === 0) {
+      return NextResponse.json({ success: true, deletedCount: 0 })
+    }
+
+    const { error: deleteError } = await supabase.from("tables").delete().in("id", tableIds)
+    if (deleteError) {
+      console.error("[v0] Error bulk deleting tables:", deleteError)
+      return NextResponse.json({ error: deleteError.message || "Failed to delete tables" }, { status: 500 })
+    }
+
+    return NextResponse.json({ success: true, deletedCount: tableIds.length })
+  } catch (error) {
+    console.error("[v0] Error in tables DELETE API:", error)
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Internal server error" },
       { status: 500 },
