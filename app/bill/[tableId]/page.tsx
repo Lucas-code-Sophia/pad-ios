@@ -73,29 +73,6 @@ const normalizeBillText = (value?: string | null) =>
     .toLowerCase()
     .trim()
 
-const DESSERT_NOTE_LABEL = "Avec dessert"
-
-const isCafeEtTheCategory = (category?: string | null) => {
-  const normalizedCategory = normalizeBillText(category)
-  return normalizedCategory.includes("cafe") && normalizedCategory.includes("the")
-}
-
-const appendNoteLineIfMissing = (notes: string | null | undefined, line: string) => {
-  const noteLines = String(notes || "")
-    .split(/\r?\n/)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-
-  const normalizedLine = normalizeBillText(line)
-  const hasLine = noteLines.some((entry) => normalizeBillText(entry) === normalizedLine)
-
-  if (hasLine) {
-    return noteLines.join("\n")
-  }
-
-  return [...noteLines, line].join("\n")
-}
-
 const isEmployeeDiscountSupplement = (supplement: Supplement) => {
   const normalizedName = normalizeBillText(supplement.name)
   const normalizedNotes = normalizeBillText(supplement.notes || "")
@@ -134,7 +111,6 @@ export default function BillPage() {
   const [paidAmount, setPaidAmount] = useState(0)
   const [paymentsCount, setPaymentsCount] = useState(0)
   const [payments, setPayments] = useState<BillPaymentEntry[]>([])
-  const [dessertUpdatingItemId, setDessertUpdatingItemId] = useState<string | null>(null)
   const [swipedBillRowId, setSwipedBillRowId] = useState<string | null>(null)
   const [showSuccessDialog, setShowSuccessDialog] = useState(false)
   const [customAmount, setCustomAmount] = useState("")
@@ -748,44 +724,6 @@ export default function BillPage() {
     }
   }
 
-  const handleAddDessertNote = async (item: OrderItemWithMenu) => {
-    if (!item?.id) return
-
-    const updatedNotes = appendNoteLineIfMissing(item.notes, DESSERT_NOTE_LABEL)
-    const currentNotes = String(item.notes || "")
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .filter((entry) => entry.length > 0)
-      .join("\n")
-
-    if (updatedNotes === currentNotes) return
-
-    setDessertUpdatingItemId(item.id)
-    try {
-      const response = await fetch("/api/order-items/notes", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          itemId: item.id,
-          notes: updatedNotes,
-        }),
-      })
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}))
-        alert(error.error || "Erreur lors de la mise à jour de la note")
-        return
-      }
-
-      await fetchData()
-    } catch (error) {
-      console.error("[v0] Error adding dessert note:", error)
-      alert("Erreur lors de la mise à jour de la note")
-    } finally {
-      setDessertUpdatingItemId(null)
-    }
-  }
-
   type ReceiptPrintLine = TicketPrintLine
 
   const getTicketContext = () => {
@@ -1342,7 +1280,6 @@ export default function BillPage() {
                 const isSelected = selectedQty > 0
                 const isFullyPaid = item.paid_quantity >= item.quantity
                 const isSelectableInItemsMode = splitMode === "items" && !isFullyPaid && !item.is_complimentary
-                const isCafeEtTheItem = isCafeEtTheCategory(item.menu_item?.category)
                 const rowId = `item:${item.id}`
                 const isSwiped = swipedBillRowId === rowId
                 const canDeleteBillRow = item.paid_quantity === 0
@@ -1463,29 +1400,15 @@ export default function BillPage() {
                         )}
                         {/* Bouton Offrir pour les articles payants avec quantité restante */}
                         {!item.is_complimentary && remainingQty > 0 && (
-                          <div className="mt-1 flex items-center justify-end gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleOfferPartial(item.id, displayName, remainingQty, item.price)}
-                              className="bg-green-600 hover:bg-green-700 border-green-500 text-white h-6 w-6 p-0"
-                              title={`Offrir une partie (${remainingQty} disponible${remainingQty > 1 ? "s" : ""})`}
-                            >
-                              <Gift className="h-3 w-3" />
-                            </Button>
-                            {isCafeEtTheItem && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleAddDessertNote(item)}
-                                disabled={dessertUpdatingItemId === item.id}
-                                className="bg-amber-600 hover:bg-amber-700 border-amber-500 text-white h-6 px-2 text-[10px]"
-                                title="Ajouter la note: Avec dessert"
-                              >
-                                Dessert
-                              </Button>
-                            )}
-                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleOfferPartial(item.id, displayName, remainingQty, item.price)}
+                            className="bg-green-600 hover:bg-green-700 border-green-500 text-white h-6 w-6 p-0 mt-1"
+                            title={`Offrir une partie (${remainingQty} disponible${remainingQty > 1 ? "s" : ""})`}
+                          >
+                            <Gift className="h-3 w-3" />
+                          </Button>
                         )}
                         {/* Bouton Annuler offre pour les articles offerts */}
                         {item.is_complimentary && (

@@ -276,6 +276,21 @@ export default function OrderPage() {
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
       .trim()
+  const DESSERT_NOTE_LABEL = "Avec dessert"
+  const isCafeEtTheCategory = (category?: string | null) => {
+    const normalizedCategory = normalizeForSearch(String(category || ""))
+    return normalizedCategory.includes("cafe") && normalizedCategory.includes("the")
+  }
+  const appendNoteLineIfMissing = (notes: string | null | undefined, line: string) => {
+    const noteLines = String(notes || "")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+    const normalizedLine = normalizeForSearch(line)
+    const hasLine = noteLines.some((entry) => normalizeForSearch(entry) === normalizedLine)
+    if (hasLine) return noteLines.join("\n")
+    return [...noteLines, line].join("\n")
+  }
   const menuEnfantOptions = ["Pâtes poulet", "Frites poulet"]
   const siropOptions = [
     "Fraise",
@@ -1788,6 +1803,52 @@ export default function OrderPage() {
     setTempNotes("")
   }
 
+  const addDessertNoteToItem = async (cartItemId: string) => {
+    const item = cart.find((entry) => entry.cartItemId === cartItemId)
+    if (!item) return
+
+    const updatedNotes = appendNoteLineIfMissing(item.notes, DESSERT_NOTE_LABEL)
+    const currentNotes = String(item.notes || "")
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+      .join("\n")
+
+    if (updatedNotes === currentNotes) return
+
+    try {
+      const response = await fetch("/api/orders/fire-follow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderId: activeOrderId,
+          items: [
+            {
+              cartItemId,
+              menuItemId: getCartItemMenuItemId(item),
+              quantity: item.quantity,
+              price: getCartItemPrice(item),
+              status: item.status,
+              notes: updatedNotes,
+              isComplimentary: item.isComplimentary || false,
+              complimentaryReason: item.complimentaryReason,
+            },
+          ],
+          serverId: user?.id || "",
+        }),
+      })
+
+      if (response.ok) {
+        scheduleOrderRefresh()
+      } else {
+        throw new Error("Failed to save dessert note")
+      }
+    } catch (error) {
+      console.error("[v0] Error saving dessert note:", error)
+      scheduleOrderRefresh(0)
+    }
+  }
+
   const openSupplementDialog = () => {
     setSupplementForm(getDefaultSupplementForm())
     setSupplementDialog(true)
@@ -2910,6 +2971,7 @@ export default function OrderPage() {
                 <>
                   {cart.map((item) => {
                     const { displayName, displayNote } = getItemDisplayInfo(item.menuItem?.name || "Article inconnu", item.notes)
+                    const showDessertButton = isCafeEtTheCategory(item.menuItem?.category)
                     return (
                     <div
                       key={item.cartItemId}
@@ -2994,6 +3056,16 @@ export default function OrderPage() {
                           <Gift className="h-2.5 w-2.5 mr-0.5" />
                           Offert
                         </Button>
+                        {showDessertButton && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => addDessertNoteToItem(item.cartItemId)}
+                            className="h-5 sm:h-6 px-1.5 sm:px-2 bg-amber-600 hover:bg-amber-700 border-amber-500 text-white text-[10px] sm:text-xs"
+                          >
+                            Dessert
+                          </Button>
+                        )}
                       </div>
                       {displayNote && <p className="text-[10px] text-slate-400 mt-0.5 italic">{displayNote}</p>}
                     </div>
