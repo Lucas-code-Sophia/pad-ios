@@ -22,6 +22,7 @@ import {
   DollarSign,
   LayoutGrid,
   Wine,
+  Trophy,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -592,6 +593,28 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent className="p-4 sm:p-6 pt-0">
             <p className="text-slate-300 text-xs sm:text-sm">Total et répartition des pourboires</p>
+          </CardContent>
+        </Card>
+
+        <Card
+          className="bg-slate-800 border-slate-700 hover:border-indigo-500 transition-colors cursor-pointer"
+          onClick={() => router.push("/admin/world-cup")}
+        >
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-indigo-600 rounded-lg">
+                <Trophy className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-white text-base sm:text-lg">Coupe du monde</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Jeux événementiels</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <p className="text-slate-300 text-xs sm:text-sm">
+              Créer des matchs, afficher un QR code et retrouver automatiquement les gagnants.
+            </p>
           </CardContent>
         </Card>
 
