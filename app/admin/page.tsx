@@ -23,6 +23,7 @@ import {
   LayoutGrid,
   Wine,
   Trophy,
+  Ticket,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -733,6 +734,28 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent className="p-4 sm:p-6 pt-0">
             <p className="text-slate-300 text-xs sm:text-sm">Ticket caisse, cuisine et bar en un coup d'œil</p>
+          </CardContent>
+        </Card>
+
+        <Card
+          className="bg-slate-800 border-slate-700 hover:border-orange-500 transition-colors cursor-pointer"
+          onClick={() => router.push("/admin/la-case")}
+        >
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-orange-600 rounded-lg">
+                <Ticket className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-white text-base sm:text-lg">La Case</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Bloc ticket repas</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <p className="text-slate-300 text-xs sm:text-sm">
+              Generer un ticket repas modifiable, puis imprimer, exporter (PDF/PNG) ou partager.
+            </p>
           </CardContent>
         </Card>
 
