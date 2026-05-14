@@ -747,8 +747,8 @@ export default function AdminPage() {
                 <Ticket className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
               </div>
               <div>
-                <CardTitle className="text-white text-base sm:text-lg">La Case</CardTitle>
-                <CardDescription className="text-slate-400 text-xs sm:text-sm">Bloc ticket repas</CardDescription>
+                <CardTitle className="text-white text-base sm:text-lg">Ticket Repas</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Generateur modifiable</CardDescription>
               </div>
             </div>
           </CardHeader>

@@ -371,7 +371,7 @@ export default function LaCasePage() {
       if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
         await navigator.share({
           title: ticketLayoutData.documentTitle,
-          text: "Ticket repas genere depuis La Case",
+          text: "Ticket repas genere depuis Ticket Repas",
           files: [file],
         })
         return
@@ -379,7 +379,7 @@ export default function LaCasePage() {
 
       await navigator.share({
         title: ticketLayoutData.documentTitle,
-        text: "Ticket repas genere depuis La Case",
+        text: "Ticket repas genere depuis Ticket Repas",
       })
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
@@ -423,7 +423,7 @@ export default function LaCasePage() {
             <span className="text-xs sm:text-sm">Retour</span>
           </Button>
           <div>
-            <h1 className="text-xl sm:text-3xl font-bold text-white">La Case</h1>
+            <h1 className="text-xl sm:text-3xl font-bold text-white">Ticket Repas</h1>
             <p className="text-slate-400 text-xs sm:text-sm mt-1">
               Generateur de ticket repas modifiable avec impression, export et partage AirDrop
             </p>
@@ -452,7 +452,7 @@ export default function LaCasePage() {
               <Input
                 value={ticketLabel}
                 onChange={(event) => setTicketLabel(event.target.value)}
-                className="bg-slate-900 border-slate-700 mt-1"
+                className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                 placeholder="Ticket repas"
               />
             </div>
@@ -463,7 +463,7 @@ export default function LaCasePage() {
                 <Input
                   value={serverName}
                   onChange={(event) => setServerName(event.target.value)}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                   placeholder="Ex: Camille"
                 />
               </div>
@@ -472,7 +472,7 @@ export default function LaCasePage() {
                 <Input
                   value={serviceType}
                   onChange={(event) => setServiceType(event.target.value)}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                   placeholder="Sur place"
                 />
               </div>
@@ -485,7 +485,7 @@ export default function LaCasePage() {
                   type="datetime-local"
                   value={ticketDate}
                   onChange={(event) => setTicketDate(event.target.value)}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1 [color-scheme:dark]"
                 />
               </div>
               <div>
@@ -493,7 +493,7 @@ export default function LaCasePage() {
                 <Input
                   value={tableLabel}
                   onChange={(event) => setTableLabel(event.target.value)}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                   placeholder="Table -"
                 />
               </div>
@@ -509,7 +509,7 @@ export default function LaCasePage() {
                   value={mealsCount}
                   onChange={(event) => setMealsCount(sanitizeIntegerInput(event.target.value))}
                   onBlur={() => setMealsCount(String(mealsCountValue))}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                   placeholder="3"
                 />
               </div>
@@ -521,7 +521,7 @@ export default function LaCasePage() {
                   step="0.01"
                   value={totalAmount}
                   onChange={(event) => setTotalAmount(event.target.value)}
-                  className="bg-slate-900 border-slate-700 mt-1"
+                  className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                   placeholder="0.00"
                 />
               </div>
@@ -532,14 +532,14 @@ export default function LaCasePage() {
               <Input
                 value={customNote}
                 onChange={(event) => setCustomNote(event.target.value)}
-                className="bg-slate-900 border-slate-700 mt-1"
+                className="bg-slate-900 border-slate-700 text-white placeholder:text-slate-400 mt-1"
                 placeholder="Ex: Service midi"
               />
             </div>
 
             <div className="flex items-center gap-2">
-              <Checkbox checked={includeTax} onCheckedChange={(checked) => setIncludeTax(checked === true)} id="la-case-tax" />
-              <Label htmlFor="la-case-tax" className="text-sm text-slate-300 cursor-pointer">
+              <Checkbox checked={includeTax} onCheckedChange={(checked) => setIncludeTax(checked === true)} id="ticket-repas-tax" />
+              <Label htmlFor="ticket-repas-tax" className="text-sm text-slate-300 cursor-pointer">
                 Afficher le detail TVA
               </Label>
             </div>
@@ -663,7 +663,7 @@ export default function LaCasePage() {
           <CardContent className="p-4 sm:p-6 pt-0">
             <div className="bg-white rounded border border-slate-600 overflow-hidden">
               <iframe
-                title="Apercu ticket repas la case"
+                title="Apercu ticket repas"
                 srcDoc={ticketHtml}
                 className="w-full h-[65vh] bg-white pointer-events-none sm:pointer-events-auto"
               />
