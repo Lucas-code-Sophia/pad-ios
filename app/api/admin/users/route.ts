@@ -37,11 +37,20 @@ export async function POST(request: Request) {
         role: body.role,
         disabled: false,
         can_access_bill: body.role === "manager" ? true : Boolean(body.can_access_bill),
+        is_tva_analyst: Boolean(body.is_tva_analyst),
       })
       .select()
       .single()
 
-    if (error) throw error
+    if (error) {
+      if (error.message?.includes("is_tva_analyst")) {
+        return NextResponse.json(
+          { error: "La colonne is_tva_analyst est manquante. Appliquez la migration SQL d'abord." },
+          { status: 400 },
+        )
+      }
+      throw error
+    }
 
     return NextResponse.json(data)
   } catch (error) {

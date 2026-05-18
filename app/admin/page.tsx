@@ -24,6 +24,7 @@ import {
   Wine,
   Trophy,
   Ticket,
+  Shield,
 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -43,13 +44,21 @@ export default function AdminPage() {
   const [dailySales, setDailySales] = useState<DailySales | null>(null)
   const [users, setUsers] = useState<User[]>([])
   const [showAddUser, setShowAddUser] = useState(false)
-  const [newUser, setNewUser] = useState({ name: "", pin: "", role: "server" as "server" | "manager" })
+  const [newUser, setNewUser] = useState({
+    name: "",
+    pin: "",
+    role: "server" as "server" | "manager",
+    is_tva_analyst: false,
+  })
   const [csvFile, setCsvFile] = useState<File | null>(null)
   const [exportingMenu, setExportingMenu] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   const [editUserDialog, setEditUserDialog] = useState(false)
   const [showUsersDialog, setShowUsersDialog] = useState(false)
   const [wineCriticalCount, setWineCriticalCount] = useState(0)
+  const [reportsAccessCode, setReportsAccessCode] = useState("")
+  const [savingReportsAccessCode, setSavingReportsAccessCode] = useState(false)
+  const [loadingReportsAccessCode, setLoadingReportsAccessCode] = useState(false)
 
   useEffect(() => {
     if (!isLoading && (!user || user.role !== "manager")) {
@@ -62,6 +71,7 @@ export default function AdminPage() {
       fetchDailySales()
       fetchUsers()
       fetchWineInventoryCriticalCount()
+      fetchReportsAccessCode()
     }
   }, [user])
 
@@ -105,6 +115,21 @@ export default function AdminPage() {
     }
   }
 
+  const fetchReportsAccessCode = async () => {
+    try {
+      setLoadingReportsAccessCode(true)
+      const response = await fetch("/api/admin/reports-access")
+      if (!response.ok) return
+
+      const data = await response.json().catch(() => ({}))
+      setReportsAccessCode(String(data?.access_code || ""))
+    } catch (error) {
+      console.error("[v0] Error fetching reports access code:", error)
+    } finally {
+      setLoadingReportsAccessCode(false)
+    }
+  }
+
   const handleAddUser = async () => {
     if (newUser.pin.length !== 6) {
       alert("Le code PIN doit contenir exactement 6 chiffres")
@@ -120,11 +145,16 @@ export default function AdminPage() {
 
       if (response.ok) {
         setShowAddUser(false)
-        setNewUser({ name: "", pin: "", role: "server" })
+        setNewUser({ name: "", pin: "", role: "server", is_tva_analyst: false })
         fetchUsers()
+        return
       }
+
+      const error = await response.json().catch(() => ({}))
+      alert(error?.error || "Impossible de créer l'utilisateur")
     } catch (error) {
       console.error("[v0] Error adding user:", error)
+      alert("Erreur lors de la création de l'utilisateur")
     }
   }
 
@@ -144,6 +174,7 @@ export default function AdminPage() {
         body: JSON.stringify({
           name: editingUser.name,
           pin: editingUser.pin,
+          is_tva_analyst: Boolean(editingUser.is_tva_analyst),
         }),
       })
 
@@ -151,9 +182,14 @@ export default function AdminPage() {
         setEditUserDialog(false)
         setEditingUser(null)
         fetchUsers()
+        return
       }
+
+      const error = await response.json().catch(() => ({}))
+      alert(error?.error || "Impossible de modifier l'utilisateur")
     } catch (error) {
       console.error("[v0] Error editing user:", error)
+      alert("Erreur lors de la modification de l'utilisateur")
     }
   }
 
@@ -207,6 +243,51 @@ export default function AdminPage() {
     } catch (error) {
       console.error("[v0] Error toggling bill access:", error)
       alert("Erreur lors de la mise à jour du droit addition")
+    }
+  }
+
+  const handleToggleTvaAnalyst = async (userId: string, isTvaAnalyst: boolean) => {
+    try {
+      const response = await fetch(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_tva_analyst: isTvaAnalyst }),
+      })
+
+      if (response.ok) {
+        fetchUsers()
+        return
+      }
+
+      const error = await response.json().catch(() => ({}))
+      alert(error?.error || "Impossible de modifier le droit Analyste TVA")
+    } catch (error) {
+      console.error("[v0] Error toggling TVA analyst access:", error)
+      alert("Erreur lors de la mise à jour du droit Analyste TVA")
+    }
+  }
+
+  const handleSaveReportsAccessCode = async () => {
+    try {
+      setSavingReportsAccessCode(true)
+      const response = await fetch("/api/admin/reports-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access_code: reportsAccessCode }),
+      })
+
+      if (response.ok) {
+        alert(reportsAccessCode.trim() ? "Code d'accès enregistré." : "Code d'accès supprimé.")
+        return
+      }
+
+      const error = await response.json().catch(() => ({}))
+      alert(error?.error || "Impossible d'enregistrer le code d'accès")
+    } catch (error) {
+      console.error("[v0] Error saving reports access code:", error)
+      alert("Erreur lors de l'enregistrement du code")
+    } finally {
+      setSavingReportsAccessCode(false)
     }
   }
 
@@ -578,6 +659,28 @@ export default function AdminPage() {
         </Card>
 
         <Card
+          className="bg-slate-800 border-slate-700 hover:border-rose-500 transition-colors cursor-pointer"
+          onClick={() => router.push("/admin/tva-analyst")}
+        >
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-rose-600 rounded-lg">
+                <Shield className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-white text-base sm:text-lg">Analyste TVA</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Accès protégé</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <p className="text-slate-300 text-xs sm:text-sm">
+              Module dédié au contrôle TVA et aux indicateurs avancés.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card
           className="bg-slate-800 border-slate-700 hover:border-emerald-500 transition-colors cursor-pointer"
           onClick={() => router.push("/admin/tips")}
         >
@@ -856,6 +959,18 @@ export default function AdminPage() {
                         <option value="manager">Manager</option>
                       </select>
                     </div>
+                    <label className="flex items-center gap-3 rounded-md border border-slate-600 bg-slate-700/60 p-3">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(newUser.is_tva_analyst)}
+                        onChange={(e) => setNewUser({ ...newUser, is_tva_analyst: e.target.checked })}
+                        className="h-4 w-4 accent-rose-500"
+                      />
+                      <div>
+                        <p className="text-sm font-medium text-white">Analyste TVA</p>
+                        <p className="text-xs text-slate-300">Autorise l'accès au module Rapports avancés protégé.</p>
+                      </div>
+                    </label>
                     <Button onClick={handleAddUser} className="w-full bg-green-600 hover:bg-green-700">
                       Créer l'utilisateur
                     </Button>
@@ -864,6 +979,42 @@ export default function AdminPage() {
               </Dialog>
             </div>
           </DialogHeader>
+          <Card className="bg-slate-900/70 border-slate-600">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="reports-access-code">Code d'accès Rapports avancés / Analyste TVA</Label>
+                <p className="text-xs text-slate-400">
+                  Ce code sera demandé pour ouvrir les modules protégés.
+                </p>
+              </div>
+              <Input
+                id="reports-access-code"
+                type="password"
+                value={reportsAccessCode}
+                onChange={(e) => setReportsAccessCode(e.target.value)}
+                className="bg-slate-700 border-slate-600"
+                placeholder="Ex: 246810"
+                disabled={loadingReportsAccessCode || savingReportsAccessCode}
+              />
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveReportsAccessCode}
+                  disabled={loadingReportsAccessCode || savingReportsAccessCode}
+                  className="bg-rose-600 hover:bg-rose-700"
+                >
+                  {savingReportsAccessCode ? "Enregistrement..." : "Enregistrer le code"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setReportsAccessCode("")}
+                  disabled={loadingReportsAccessCode || savingReportsAccessCode}
+                  className="bg-slate-700 border-slate-500 text-slate-100 hover:bg-slate-600"
+                >
+                  Vider
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
           <div className="space-y-2 mt-4">
             {users.map((u) => (
               <Card key={u.id} className="bg-slate-700 border-slate-600 p-4">
@@ -877,6 +1028,12 @@ export default function AdminPage() {
                     </div>
                     <div className="text-sm text-slate-300 flex flex-wrap items-center gap-2">
                       <span>{u.role === "manager" ? "Manager" : "Serveur"}</span>
+                      {u.is_tva_analyst && (
+                        <>
+                          <span className="text-slate-600">•</span>
+                          <span className="text-rose-300">Analyste TVA</span>
+                        </>
+                      )}
                       {u.role === "server" && (
                         <>
                           <span className="text-slate-600">•</span>
@@ -922,6 +1079,14 @@ export default function AdminPage() {
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => handleToggleTvaAnalyst(u.id, !u.is_tva_analyst)}
+                      className={`${u.is_tva_analyst ? "bg-rose-900/30 hover:bg-rose-900/50 border-rose-700 text-rose-300" : "bg-slate-900/40 hover:bg-slate-900/60 border-slate-500 text-slate-300"}`}
+                    >
+                      {u.is_tva_analyst ? "TVA ON" : "TVA OFF"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={() => handleDeleteUser(u.id)}
                       className="bg-red-900/30 hover:bg-red-900/50 border-red-700 text-red-400"
                     >
@@ -961,6 +1126,18 @@ export default function AdminPage() {
                   placeholder="Laisser vide pour ne pas changer"
                 />
               </div>
+              <label className="flex items-center gap-3 rounded-md border border-slate-600 bg-slate-700/60 p-3">
+                <input
+                  type="checkbox"
+                  checked={Boolean(editingUser.is_tva_analyst)}
+                  onChange={(e) => setEditingUser({ ...editingUser, is_tva_analyst: e.target.checked })}
+                  className="h-4 w-4 accent-rose-500"
+                />
+                <div>
+                  <p className="text-sm font-medium text-white">Analyste TVA</p>
+                  <p className="text-xs text-slate-300">Autorise l'accès au module Rapports avancés protégé.</p>
+                </div>
+              </label>
               <Button onClick={handleEditUser} className="w-full bg-blue-600 hover:bg-blue-700">
                 Enregistrer les modifications
               </Button>

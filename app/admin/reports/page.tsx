@@ -147,6 +147,7 @@ const shiftIsoDate = (isoDate: string, days: number) => {
 export default function ReportsPage() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
+  const canOpenReports = Boolean(user && (user.role === "manager" || user.is_tva_analyst))
   const [activeTab, setActiveTab] = useState<"overview" | "service">("overview")
   const [period, setPeriod] = useState<"today" | "7days" | "30days" | "3months" | "custom">("today")
   const [customStartDate, setCustomStartDate] = useState("")
@@ -157,7 +158,12 @@ export default function ReportsPage() {
   const [topDishesLimit, setTopDishesLimit] = useState<(typeof TOP_DISHES_OPTIONS)[number]>(10)
   const [selectedTopDishId, setSelectedTopDishId] = useState<string | null>(null)
   const [serverStats, setServerStats] = useState<ServerStats[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [reportsAccessCode, setReportsAccessCode] = useState("")
+  const [enteredReportsCode, setEnteredReportsCode] = useState("")
+  const [reportsCodeError, setReportsCodeError] = useState("")
+  const [accessCodeLoading, setAccessCodeLoading] = useState(true)
+  const [accessUnlocked, setAccessUnlocked] = useState(false)
 
   // Service summary state
   const [summaryDate, setSummaryDate] = useState(getBusinessDateIso)
@@ -193,29 +199,76 @@ export default function ReportsPage() {
     },
   })
 
+  const requiresAccessCode = reportsAccessCode.trim().length > 0
+  const hasReportsAccess = !requiresAccessCode || accessUnlocked
+
   useEffect(() => {
-    if (!isLoading && (!user || user.role !== "manager")) {
+    if (!isLoading && (!user || !canOpenReports)) {
       router.push("/floor-plan")
     }
-  }, [user, isLoading, router])
+  }, [user, isLoading, canOpenReports, router])
 
   useEffect(() => {
-    if (user?.role === "manager" && activeTab === "service") {
-      fetchServiceSummary()
-    }
-  }, [user, summaryDate, activeTab])
+    if (accessCodeLoading || !canOpenReports || !hasReportsAccess || activeTab !== "service") return
+    fetchServiceSummary()
+  }, [accessCodeLoading, canOpenReports, hasReportsAccess, summaryDate, activeTab])
 
   useEffect(() => {
-    if (user?.role !== "manager" || activeTab !== "overview") return
+    if (accessCodeLoading || !canOpenReports || !hasReportsAccess || activeTab !== "overview") return
     if (period === "custom" && (!customStartDate || !customEndDate)) return
     fetchReports()
-  }, [user, activeTab, period, customStartDate, customEndDate])
+  }, [accessCodeLoading, canOpenReports, hasReportsAccess, activeTab, period, customStartDate, customEndDate])
 
   useEffect(() => {
     if (selectedTopDishId && !topDishes.some((dish) => dish.menu_item_id && dish.menu_item_id === selectedTopDishId)) {
       setSelectedTopDishId(null)
     }
   }, [topDishes, selectedTopDishId])
+
+  useEffect(() => {
+    const fetchReportsAccessCode = async () => {
+      try {
+        setAccessCodeLoading(true)
+        const response = await fetch("/api/admin/reports-access")
+        if (!response.ok) {
+          setReportsAccessCode("")
+          return
+        }
+
+        const data = await response.json().catch(() => ({}))
+        const accessCode = String(data?.access_code || "").trim()
+        setReportsAccessCode(accessCode)
+        if (!accessCode) setAccessUnlocked(true)
+      } catch (error) {
+        console.error("[v0] Error fetching reports access code:", error)
+        setReportsAccessCode("")
+      } finally {
+        setAccessCodeLoading(false)
+      }
+    }
+
+    if (!user || !canOpenReports) {
+      setAccessCodeLoading(false)
+      return
+    }
+
+    fetchReportsAccessCode()
+  }, [user, canOpenReports])
+
+  const unlockReportsAccess = () => {
+    if (!requiresAccessCode) {
+      setAccessUnlocked(true)
+      return
+    }
+
+    if (enteredReportsCode.trim() !== reportsAccessCode.trim()) {
+      setReportsCodeError("Code invalide")
+      return
+    }
+
+    setReportsCodeError("")
+    setAccessUnlocked(true)
+  }
 
   const fetchServiceSummary = async () => {
     try {
@@ -284,10 +337,60 @@ export default function ReportsPage() {
     }
   }
 
-  if (isLoading || loading) {
+  if (isLoading || accessCodeLoading || (hasReportsAccess && loading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-900">
         <div className="text-white text-xl">Chargement...</div>
+      </div>
+    )
+  }
+
+  if (!user || !canOpenReports) {
+    return null
+  }
+
+  if (requiresAccessCode && !hasReportsAccess) {
+    return (
+      <div className="min-h-screen bg-slate-900 p-4 sm:p-6 flex items-center justify-center">
+        <Card className="w-full max-w-md bg-slate-800 border-slate-700">
+          <CardHeader>
+            <CardTitle className="text-white text-xl">Accès protégé</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="reports-access-input" className="text-slate-200">
+                Code Analyste TVA
+              </Label>
+              <Input
+                id="reports-access-input"
+                type="password"
+                value={enteredReportsCode}
+                onChange={(e) => {
+                  setEnteredReportsCode(e.target.value)
+                  if (reportsCodeError) setReportsCodeError("")
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") unlockReportsAccess()
+                }}
+                className="bg-slate-700 border-slate-600 text-white"
+                placeholder="Entrer le code d'accès"
+              />
+              {reportsCodeError && <p className="text-xs text-rose-400">{reportsCodeError}</p>}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={unlockReportsAccess} className="bg-rose-600 hover:bg-rose-700 w-full">
+                Déverrouiller
+              </Button>
+              <Button
+                onClick={() => router.push("/floor-plan")}
+                variant="outline"
+                className="bg-slate-700 border-slate-600 text-white"
+              >
+                Retour
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     )
   }
@@ -333,7 +436,7 @@ export default function ReportsPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3 sm:gap-4">
             <Button
-              onClick={() => router.push("/admin")}
+              onClick={() => router.push(user?.role === "manager" ? "/admin" : "/floor-plan")}
               variant="outline"
               size="sm"
               className="bg-slate-800 text-white border-slate-700"

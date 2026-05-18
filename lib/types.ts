@@ -5,6 +5,7 @@ export interface User {
   role: "server" | "manager"
   disabled?: boolean
   can_access_bill?: boolean
+  is_tva_analyst?: boolean
   created_at: string
 }
 
