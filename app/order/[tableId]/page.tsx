@@ -389,6 +389,7 @@ export default function OrderPage() {
     const normalizedName = normalizeForSearch(name)
     return normalizedName.includes("sirop") && normalizedName.includes("eau")
   }
+  const isDiaboloItem = (name: string) => normalizeForSearch(name).includes("diabolo")
   const isGinTonicItem = (name: string) => normalizeForSearch(name).includes("gin tonic")
   const matchesSpiritBaseName = (name: string, type: SpiritSelectionType) => {
     const normalizedName = normalizeForSearch(name)
@@ -1463,6 +1464,59 @@ export default function OrderPage() {
     }
   }
 
+  const ensureDiaboloItemAndOpenDialog = async () => {
+    const existingDiaboloItem = menuItems.find((item) => item.status !== false && isDiaboloItem(item.name || ""))
+    if (existingDiaboloItem) {
+      openSiropDialog(existingDiaboloItem)
+      return
+    }
+
+    const getCategoryRank = (category: MenuCategory) => {
+      const normalizedCategory = normalizeForSearch(category.name || "")
+      if (normalizedCategory.includes("soft")) return 0
+      if (normalizedCategory.includes("boisson")) return 1
+      return 2
+    }
+
+    const softCategory = [...categories]
+      .sort((a, b) => getCategoryRank(a) - getCategoryRank(b))
+      .find((category) => getCategoryRank(category) < 2)
+
+    if (!softCategory) {
+      alert("Catégorie Soft/Boisson introuvable.")
+      return
+    }
+
+    const siropBaseItem = menuItems.find((item) => item.status !== false && isSiropEauItem(item.name || ""))
+    const limonadeItem = menuItems.find((item) => item.status !== false && normalizeForSearch(item.name || "") === "limonade")
+    const defaultPrice = siropBaseItem?.price ?? limonadeItem?.price ?? 4
+
+    try {
+      const response = await fetch("/api/menu/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Diabolo",
+          details: siropOptions.join(", "),
+          price: defaultPrice,
+          tax_rate: 10,
+          category: softCategory.name,
+          routing: "bar",
+          status: true,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error("creation_failed")
+      }
+      const createdItem: MenuItem = await response.json()
+      setMenuItems((prev) => (prev.some((item) => item.id === createdItem.id) ? prev : [...prev, createdItem]))
+      openSiropDialog(createdItem)
+    } catch (error) {
+      console.error("[v0] Error creating diabolo item:", error)
+      alert("Impossible de créer l'article 'Diabolo'.")
+    }
+  }
+
   // ── Couverts ──────────────────────────────────────────────────────────
   const getActiveCoversCount = () => {
     if (coversCount != null && coversCount > 0) return coversCount
@@ -1550,6 +1604,10 @@ export default function OrderPage() {
       return
     }
     if (isSiropEauItem(item.name)) {
+      openSiropDialog(item)
+      return
+    }
+    if (isDiaboloItem(item.name)) {
       openSiropDialog(item)
       return
     }
@@ -2479,6 +2537,13 @@ export default function OrderPage() {
         if (a.price !== b.price) return a.price - b.price
         return a.name.localeCompare(b.name, "fr", { sensitivity: "base" })
       })
+  const isSoftCategorySelected =
+    selectedCategoryNameNormalized.includes("soft") || selectedCategoryNameNormalized.includes("boisson")
+  const hasDiaboloInDisplayedItems = displayedItems.some((item) => isDiaboloItem(item.name || ""))
+  const shouldShowDiaboloShortcut =
+    isSoftCategorySelected &&
+    !hasDiaboloInDisplayedItems &&
+    (!hasSearchQuery || normalizeForSearch("diabolo").includes(normalizedSearchQuery))
   const isAlcoolsCategorySelected = selectedCategoryNameNormalized.includes("alcool")
   const missingSpiritBaseItems = isAlcoolsCategorySelected && !hasSearchQuery
     ? STANDARD_ALCOOL_BASE_ITEMS.filter(
@@ -2749,7 +2814,10 @@ export default function OrderPage() {
 
           {/* Menu Items Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-            {displayedItems.length === 0 && visibleCustomMenuPresets.length === 0 ? (
+            {displayedItems.length === 0 &&
+            visibleCustomMenuPresets.length === 0 &&
+            missingSpiritBaseItems.length === 0 &&
+            !shouldShowDiaboloShortcut ? (
               <Card className="col-span-2 sm:col-span-3 p-6 sm:p-8 bg-slate-800 border-slate-700 text-center">
                 <p className="text-slate-300 text-sm sm:text-base">Aucun élément trouvé</p>
                 {hasSearchQuery && (
@@ -2789,6 +2857,22 @@ export default function OrderPage() {
                     </div>
                   </Card>
                 ))}
+
+                {shouldShowDiaboloShortcut && (
+                  <Card
+                    key="diabolo-shortcut"
+                    className="p-3 sm:p-4 bg-emerald-900/20 border-2 border-emerald-700/70 hover:bg-emerald-900/35 cursor-pointer transition-colors"
+                    onClick={() => {
+                      void ensureDiaboloItemAndOpenDialog()
+                    }}
+                  >
+                    <div className="text-center">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 mb-1">Soft</div>
+                      <div className="font-semibold text-sm sm:text-base text-white mb-1">Diabolo</div>
+                      <div className="text-xs sm:text-sm text-emerald-200">Choix du goût</div>
+                    </div>
+                  </Card>
+                )}
 
                 {displayedItems.map((item) => {
               const quantity = pendingQuantityByMenuItemId.get(item.id) || 0
