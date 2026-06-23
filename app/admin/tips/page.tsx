@@ -11,6 +11,16 @@ import { Label } from "@/components/ui/label"
 import { useAuth } from "@/lib/auth-context"
 import { Calendar, ArrowLeft, DollarSign, TrendingUp, Users, CheckCircle } from "lucide-react"
 import { useRouter } from "next/navigation"
+import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
+import { ChartContainer, ChartTooltip } from "@/components/ui/chart"
+
+type WeeklyTipPoint = {
+  weekStart: string
+  weekEnd: string
+  weekNumber: number
+  amount: number
+  change: number | null
+}
 
 type TipsResponse = {
   weeklyTotal: number
@@ -23,6 +33,7 @@ type TipsResponse = {
   weekStart: string
   weekEnd: string
   weekNumber: number
+  weeklyHistory: WeeklyTipPoint[]
   dailyBreakdown: Array<{ date: string; amount: number; tables: number; servers: Array<{ name: string; amount: number }> }>
   recentEntries: Array<{ created_at: string; amount: number; payment_method: string; table_number: string; server_name: string }>
   settlement?: {
@@ -44,6 +55,34 @@ const weekOptions = [
 ]
 
 const REDUCED_WEEKLY_TIPS_RATE = 0.8
+
+function WeeklyTipsTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean
+  payload?: Array<{ payload: WeeklyTipPoint & { label: string } }>
+}) {
+  const point = payload?.[0]?.payload
+  if (!active || !point) return null
+
+  const changeLabel =
+    point.change === null
+      ? "Pas de comparaison"
+      : point.change === 0
+        ? "Stable"
+        : `${point.change > 0 ? "+" : ""}${point.change.toFixed(1)} %`
+
+  return (
+    <div className="min-w-40 rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-xs shadow-xl">
+      <p className="font-semibold text-white">{point.label}</p>
+      <p className="mt-1 text-emerald-300">{point.amount.toFixed(2)} € de pourboires</p>
+      <p className={point.change !== null && point.change < 0 ? "text-rose-300" : "text-slate-300"}>
+        Évolution : {changeLabel}
+      </p>
+    </div>
+  )
+}
 
 export default function TipsPage() {
   const router = useRouter()
@@ -91,9 +130,17 @@ export default function TipsPage() {
   const displayedWeeklyTotal = tips
     ? Math.round(tips.weeklyTotal * (canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE) * 100) / 100
     : null
-  const displayedCardToTake = tips
+  const displayedCardTotal = tips
     ? Math.round(tips.totalCard * (canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE) * 100) / 100
     : null
+  const displayedWeeklyHistory = useMemo(() => {
+    const rate = canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE
+    return (tips?.weeklyHistory || []).map((entry) => ({
+      ...entry,
+      label: `Semaine ${entry.weekNumber}`,
+      amount: Math.round(entry.amount * rate * 100) / 100,
+    }))
+  }, [canSeeActualWeeklyTips, tips?.weeklyHistory])
 
   const isSettled = tips?.settlement?.status === "done"
 
@@ -322,6 +369,65 @@ export default function TipsPage() {
         </Card>
       </div>
 
+      <Card className="bg-slate-800 border-slate-700 mb-4 sm:mb-6">
+        <CardHeader className="p-4 sm:p-6 pb-2">
+          <CardTitle className="text-base sm:text-lg text-white flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-emerald-400" />
+            Évolution des pourboires par semaine
+          </CardTitle>
+          <p className="text-xs sm:text-sm text-slate-400">
+            Montant total des 8 dernières semaines jusqu’à la période sélectionnée
+          </p>
+        </CardHeader>
+        <CardContent className="p-3 sm:p-6 pt-2">
+          {displayedWeeklyHistory.length > 0 ? (
+            <ChartContainer
+              config={{
+                amount: {
+                  label: "Pourboires",
+                  color: "#34d399",
+                },
+              }}
+              className="h-[260px] w-full sm:h-[320px] [&_.recharts-cartesian-axis-tick_text]:fill-slate-300"
+            >
+              <AreaChart data={displayedWeeklyHistory} margin={{ top: 12, right: 12, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="weeklyTipsGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#34d399" stopOpacity={0.45} />
+                    <stop offset="100%" stopColor="#34d399" stopOpacity={0.03} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.18)" vertical={false} />
+                <XAxis
+                  dataKey="weekNumber"
+                  tickFormatter={(value) => `S${value}`}
+                  tickLine={false}
+                  axisLine={{ stroke: "rgba(148,163,184,0.35)" }}
+                />
+                <YAxis
+                  width={56}
+                  tickFormatter={(value) => `${Number(value).toFixed(0)} €`}
+                  tickLine={false}
+                  axisLine={false}
+                />
+                <ChartTooltip cursor={{ stroke: "#34d399", strokeDasharray: "4 4" }} content={<WeeklyTipsTooltip />} />
+                <Area
+                  type="monotone"
+                  dataKey="amount"
+                  stroke="#34d399"
+                  strokeWidth={3}
+                  fill="url(#weeklyTipsGradient)"
+                  dot={{ r: 4, fill: "#0f172a", stroke: "#34d399", strokeWidth: 2 }}
+                  activeDot={{ r: 6, fill: "#34d399", stroke: "#ecfdf5", strokeWidth: 2 }}
+                />
+              </AreaChart>
+            </ChartContainer>
+          ) : (
+            <p className="py-10 text-center text-sm text-slate-400">Aucune donnée disponible.</p>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4">
         <Card className="bg-slate-800 border-slate-700 p-4 sm:p-6 lg:col-span-2">
           <h2 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4 flex items-center gap-2">
@@ -384,11 +490,11 @@ export default function TipsPage() {
               </div>
               <div className="flex justify-between">
                 <span>Carte bancaire</span>
-                <span>{tips?.totalCard.toFixed(2)} €</span>
+                <span>{displayedCardTotal?.toFixed(2)} €</span>
               </div>
               <div className="flex justify-between pt-2 border-t border-slate-700">
                 <span>À prendre en caisse (CB)</span>
-                <span className="text-amber-300 font-semibold">{displayedCardToTake?.toFixed(2)} €</span>
+                <span className="text-amber-300 font-semibold">{displayedCardTotal?.toFixed(2)} €</span>
               </div>
             </div>
             <div className="mt-4 flex items-center justify-between">
@@ -485,11 +591,11 @@ export default function TipsPage() {
               </div>
               <div className="flex justify-between">
                 <span>Carte bancaire</span>
-                <span>{tips?.totalCard.toFixed(2)} €</span>
+                <span>{displayedCardTotal?.toFixed(2)} €</span>
               </div>
               <div className="flex justify-between pt-2 border-t border-slate-700">
                 <span>À prendre en caisse (CB)</span>
-                <span className="text-amber-300 font-semibold">{displayedCardToTake?.toFixed(2)} €</span>
+                <span className="text-amber-300 font-semibold">{displayedCardTotal?.toFixed(2)} €</span>
               </div>
             </div>
 

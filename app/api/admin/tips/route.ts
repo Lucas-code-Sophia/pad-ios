@@ -28,12 +28,75 @@ interface DailyBreakdown {
   tables: Set<string>
 }
 
+const WEEKLY_HISTORY_LENGTH = 8
+const TIPS_QUERY_PAGE_SIZE = 1000
+
 const getIsoWeekNumber = (date: Date) => {
   const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
   const dayNumber = target.getUTCDay() || 7
   target.setUTCDate(target.getUTCDate() + 4 - dayNumber)
   const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1))
   return Math.ceil(((target.getTime() - yearStart.getTime()) / 86400000 + 1) / 7)
+}
+
+const toDateString = (date: Date) => date.toISOString().split("T")[0]
+
+async function fetchTipPayments(
+  supabase: any,
+  startIso: string,
+  endIso: string,
+  includeDetails: boolean,
+) {
+  const rows: any[] = []
+
+  for (let page = 0; ; page += 1) {
+    const from = page * TIPS_QUERY_PAGE_SIZE
+    const to = from + TIPS_QUERY_PAGE_SIZE - 1
+    const select = includeDetails
+      ? `
+        tip_amount,
+        created_at,
+        payment_method,
+        recorded_by,
+        orders!inner(
+          table_id,
+          tables(
+            table_number
+          )
+        ),
+        users:users!payments_recorded_by_fkey(
+          name
+        )
+      `
+      : `
+        tip_amount,
+        created_at,
+        orders!inner(
+          table_id
+        )
+      `
+
+    const { data, error } = await supabase
+      .from("payments")
+      .select(select)
+      .gte("created_at", startIso)
+      .lte("created_at", endIso)
+      .not("tip_amount", "is", null)
+      .gt("tip_amount", 0)
+      .order("created_at", { ascending: true })
+      .range(from, to)
+
+    if (error) {
+      return { data: null, error }
+    }
+
+    const pageRows = data || []
+    rows.push(...pageRows)
+
+    if (pageRows.length < TIPS_QUERY_PAGE_SIZE) {
+      return { data: rows, error: null }
+    }
+  }
 }
 
 export async function GET(request: Request) {
@@ -43,38 +106,23 @@ export async function GET(request: Request) {
 
     const supabase = await createClient()
 
-    // Calculer les dates de la semaine
+    // Calculer une semaine complète du lundi au dimanche sans décalage lié au fuseau horaire.
     const now = new Date()
-    const currentDay = now.getDay()
-    const diff = now.getDate() - currentDay + (currentDay === 0 ? -6 : 1)
-    
-    let weekStart: Date
-    let weekEnd: Date
+    const today = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()))
+    const daysSinceMonday = (today.getUTCDay() + 6) % 7
+    const weekOffset = week === "current" ? 0 : week === "last" ? 7 : week === "last2" ? 14 : null
 
-    if (week === "current") {
-      weekStart = new Date(now.setDate(diff))
-      weekStart.setHours(0, 0, 0, 0)
-      weekEnd = new Date(weekStart)
-      weekEnd.setDate(weekStart.getDate() + 6)
-      weekEnd.setHours(23, 59, 59, 999)
-    } else if (week === "last") {
-      weekStart = new Date(now.setDate(diff - 7))
-      weekStart.setHours(0, 0, 0, 0)
-      weekEnd = new Date(weekStart)
-      weekEnd.setDate(weekStart.getDate() + 6)
-      weekEnd.setHours(23, 59, 59, 999)
-    } else if (week === "last2") {
-      weekStart = new Date(now.setDate(diff - 14))
-      weekStart.setHours(0, 0, 0, 0)
-      weekEnd = new Date(weekStart)
-      weekEnd.setDate(weekStart.getDate() + 6)
-      weekEnd.setHours(23, 59, 59, 999)
-    } else {
+    if (weekOffset === null) {
       return NextResponse.json({ error: "Invalid week parameter" }, { status: 400 })
     }
 
-    const weekStartStr = weekStart.toISOString().split("T")[0]
-    const weekEndStr = weekEnd.toISOString().split("T")[0]
+    const weekStart = new Date(today)
+    weekStart.setUTCDate(today.getUTCDate() - daysSinceMonday - weekOffset)
+    const weekEnd = new Date(weekStart)
+    weekEnd.setUTCDate(weekStart.getUTCDate() + 6)
+
+    const weekStartStr = toDateString(weekStart)
+    const weekEndStr = toDateString(weekEnd)
     const effectiveWeekStartStr = clampDateToRestaurantOpening(weekStartStr)
     const effectiveWeekStartIso = `${effectiveWeekStartStr}T00:00:00.000Z`
     const effectiveWeekEndIso = `${weekEndStr}T23:59:59.999Z`
@@ -92,6 +140,7 @@ export async function GET(request: Request) {
         weekStart: weekStartStr,
         weekEnd: weekEndStr,
         weekNumber,
+        weeklyHistory: [],
         dailyBreakdown: [],
         recentEntries: [],
         settlement: null,
@@ -99,28 +148,12 @@ export async function GET(request: Request) {
     }
 
     // Récupérer les paiements avec des pourboires
-    const { data: payments, error: paymentsError } = await supabase
-      .from("payments")
-      .select(`
-        tip_amount,
-        created_at,
-        payment_method,
-        recorded_by,
-        orders!inner(
-          table_id,
-          tables(
-            table_number
-          )
-        ),
-        users:users!payments_recorded_by_fkey(
-          name
-        )
-      `)
-      .gte("created_at", effectiveWeekStartIso)
-      .lte("created_at", effectiveWeekEndIso)
-      .not("tip_amount", "is", null)
-      .gt("tip_amount", 0)
-      .order("created_at", { ascending: true })
+    const { data: payments, error: paymentsError } = await fetchTipPayments(
+      supabase,
+      effectiveWeekStartIso,
+      effectiveWeekEndIso,
+      true,
+    )
 
     if (paymentsError) {
       console.error("Error fetching tips:", paymentsError)
@@ -142,30 +175,53 @@ export async function GET(request: Request) {
       0,
     )
 
-    // Récupérer les données de la semaine dernière pour comparaison
-    let lastWeekTotal = 0
-    if (week === "current") {
-      const lastWeekStart = new Date(weekStart)
-      lastWeekStart.setDate(lastWeekStart.getDate() - 7)
-      const lastWeekEnd = new Date(weekEnd)
-      lastWeekEnd.setDate(lastWeekEnd.getDate() - 7)
+    // Construire l'historique des semaines jusqu'à la semaine sélectionnée.
+    const weeklyHistory = Array.from({ length: WEEKLY_HISTORY_LENGTH }, (_, index) => {
+      const start = new Date(weekStart)
+      start.setUTCDate(weekStart.getUTCDate() - (WEEKLY_HISTORY_LENGTH - 1 - index) * 7)
+      const end = new Date(start)
+      end.setUTCDate(start.getUTCDate() + 6)
 
-      const lastWeekEndStr = lastWeekEnd.toISOString().split("T")[0]
-      if (!isBeforeRestaurantOpeningDate(lastWeekEndStr)) {
-        const lastWeekStartStr = clampDateToRestaurantOpening(lastWeekStart.toISOString().split("T")[0])
-        const { data: lastWeekPayments } = await supabase
-          .from("payments")
-          .select("tip_amount")
-          .gte("created_at", `${lastWeekStartStr}T00:00:00.000Z`)
-          .lte("created_at", `${lastWeekEndStr}T23:59:59.999Z`)
-          .not("tip_amount", "is", null)
-          .gt("tip_amount", 0)
-
-        lastWeekTotal = lastWeekPayments?.reduce((sum: number, p: any) => sum + (p.tip_amount || 0), 0) || 0
+      return {
+        weekStart: toDateString(start),
+        weekEnd: toDateString(end),
+        weekNumber: getIsoWeekNumber(start),
+        amount: 0,
+        change: null as number | null,
       }
+    })
+
+    const historyStartStr = clampDateToRestaurantOpening(weeklyHistory[0].weekStart)
+    const { data: historyPayments, error: historyError } = await fetchTipPayments(
+      supabase,
+      `${historyStartStr}T00:00:00.000Z`,
+      effectiveWeekEndIso,
+      false,
+    )
+
+    if (historyError) {
+      console.error("Error fetching weekly tips history:", historyError)
+      return NextResponse.json({ error: "Failed to fetch weekly tips history" }, { status: 500 })
     }
 
-    const weeklyChange = lastWeekTotal > 0 ? ((weeklyTotal - lastWeekTotal) / lastWeekTotal) * 100 : 0
+    const historyPaymentRows = historyPayments || []
+    historyPaymentRows.forEach((payment: { tip_amount: number | null; created_at: string }) => {
+      const paymentDate = payment.created_at.slice(0, 10)
+      const period = weeklyHistory.find(
+        (entry) => paymentDate >= entry.weekStart && paymentDate <= entry.weekEnd,
+      )
+      if (period) {
+        period.amount += payment.tip_amount || 0
+      }
+    })
+
+    weeklyHistory.forEach((entry, index) => {
+      if (index === 0) return
+      const previousAmount = weeklyHistory[index - 1].amount
+      entry.change = previousAmount > 0 ? ((entry.amount - previousAmount) / previousAmount) * 100 : null
+    })
+
+    const weeklyChange = weeklyHistory.at(-1)?.change || 0
 
     // Grouper par jour
     const dailyBreakdown: any[] = []
@@ -261,6 +317,7 @@ export async function GET(request: Request) {
       weekStart: weekStartStr,
       weekEnd: weekEndStr,
       weekNumber,
+      weeklyHistory,
       dailyBreakdown: dailyBreakdownForJson,
       recentEntries,
       settlement,
