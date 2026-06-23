@@ -91,6 +91,9 @@ export default function TipsPage() {
   const displayedWeeklyTotal = tips
     ? Math.round(tips.weeklyTotal * (canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE) * 100) / 100
     : null
+  const displayedCardToTake = tips
+    ? Math.round(tips.totalCard * (canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE) * 100) / 100
+    : null
 
   const isSettled = tips?.settlement?.status === "done"
 
@@ -385,7 +388,7 @@ export default function TipsPage() {
               </div>
               <div className="flex justify-between pt-2 border-t border-slate-700">
                 <span>À prendre en caisse (CB)</span>
-                <span className="text-amber-300 font-semibold">{tips?.totalCard.toFixed(2)} €</span>
+                <span className="text-amber-300 font-semibold">{displayedCardToTake?.toFixed(2)} €</span>
               </div>
             </div>
             <div className="mt-4 flex items-center justify-between">
@@ -486,7 +489,7 @@ export default function TipsPage() {
               </div>
               <div className="flex justify-between pt-2 border-t border-slate-700">
                 <span>À prendre en caisse (CB)</span>
-                <span className="text-amber-300 font-semibold">{tips?.totalCard.toFixed(2)} €</span>
+                <span className="text-amber-300 font-semibold">{displayedCardToTake?.toFixed(2)} €</span>
               </div>
             </div>
 
