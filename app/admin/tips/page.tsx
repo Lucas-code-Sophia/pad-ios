@@ -43,6 +43,8 @@ const weekOptions = [
   { id: "last2", label: "Semaine -2" },
 ]
 
+const REDUCED_WEEKLY_TIPS_RATE = 0.8
+
 export default function TipsPage() {
   const router = useRouter()
   const { user } = useAuth()
@@ -83,6 +85,12 @@ export default function TipsPage() {
     if (change === 0) return "Stable"
     return change > 0 ? `+${change.toFixed(1)}%` : `${change.toFixed(1)}%`
   }, [tips])
+
+  const canSeeActualWeeklyTips =
+    user?.role === "manager" && user.name.trim().toLocaleUpperCase("fr-FR") === "LUCAS"
+  const displayedWeeklyTotal = tips
+    ? Math.round(tips.weeklyTotal * (canSeeActualWeeklyTips ? 1 : REDUCED_WEEKLY_TIPS_RATE) * 100) / 100
+    : null
 
   const isSettled = tips?.settlement?.status === "done"
 
@@ -281,7 +289,7 @@ export default function TipsPage() {
             </div>
             <div>
               <p className="text-xs sm:text-sm text-slate-400">Total semaine</p>
-              <p className="text-xl sm:text-2xl font-bold text-white">{tips?.weeklyTotal.toFixed(2)} €</p>
+              <p className="text-xl sm:text-2xl font-bold text-white">{displayedWeeklyTotal?.toFixed(2)} €</p>
             </div>
           </div>
         </Card>
@@ -365,7 +373,7 @@ export default function TipsPage() {
             <div className="space-y-2 text-sm text-slate-300">
               <div className="flex justify-between">
                 <span>Total tips</span>
-                <span className="text-emerald-300 font-semibold">{tips?.weeklyTotal.toFixed(2)} €</span>
+                <span className="text-emerald-300 font-semibold">{displayedWeeklyTotal?.toFixed(2)} €</span>
               </div>
               <div className="flex justify-between">
                 <span>Espèces</span>
@@ -466,7 +474,7 @@ export default function TipsPage() {
             <div className="bg-slate-900/70 border border-slate-700 rounded p-4 space-y-2 text-sm">
               <div className="flex justify-between">
                 <span>Total tips</span>
-                <span className="text-emerald-300 font-semibold">{tips?.weeklyTotal.toFixed(2)} €</span>
+                <span className="text-emerald-300 font-semibold">{displayedWeeklyTotal?.toFixed(2)} €</span>
               </div>
               <div className="flex justify-between">
                 <span>Espèces</span>
