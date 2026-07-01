@@ -659,6 +659,28 @@ export default function AdminPage() {
         </Card>
 
         <Card
+          className="bg-slate-800 border-slate-700 hover:border-amber-500 transition-colors cursor-pointer"
+          onClick={() => router.push("/admin/year-comparison")}
+        >
+          <CardHeader className="p-4 sm:p-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 sm:p-3 bg-amber-600 rounded-lg">
+                <TrendingUp className="h-5 w-5 sm:h-6 sm:w-6 text-white" />
+              </div>
+              <div>
+                <CardTitle className="text-white text-base sm:text-lg">Analyse comparaison année dernière</CardTitle>
+                <CardDescription className="text-slate-400 text-xs sm:text-sm">Juillet / août vs 2025</CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4 sm:p-6 pt-0">
+            <p className="text-slate-300 text-xs sm:text-sm">
+              Suivre le CA depuis le 1er juillet et anticiper les périodes à fort effectif
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card
           className="bg-slate-800 border-slate-700 hover:border-rose-500 transition-colors cursor-pointer"
           onClick={() => router.push("/admin/tva-analyst")}
         >
